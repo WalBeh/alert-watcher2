@@ -63,7 +63,7 @@ class AlertProcessingWorkflow:
                 # Check if we should continue as new to avoid history growth
                 if await self.should_continue_as_new():
                     workflow.logger.info("Continuing workflow as new")
-                    await workflow.continue_as_new()
+                    workflow.continue_as_new()
                     
             except Exception as e:
                 workflow.logger.error(
@@ -141,8 +141,26 @@ class AlertProcessingWorkflow:
         Returns:
             ActivityResult: Result of the logging activity.
         """
+        # Get the alert name for dynamic activity naming
+        alert_name = signal_payload.alert_data.labels.alertname.lower()
+        activity_name = f"log_{alert_name}_alert"
+        
+        # List of pre-defined activities (without the "log_" prefix and "_alert" suffix)
+        predefined_activities = {"cratedb", "prometheus", "node", "pod", "service"}
+        
+        # Check if we have a pre-defined activity for this alert type
+        if alert_name in predefined_activities:
+            # Use the pre-defined activity
+            final_activity_name = activity_name
+        else:
+            # Use generic log_alert for unknown alert types
+            final_activity_name = "log_alert"
+            workflow.logger.info(
+                f"No specific activity for alert '{alert_name}', using generic log_alert activity"
+            )
+        
         result_dict = await workflow.execute_activity(
-            "log_alert",
+            final_activity_name,
             signal_payload.dict(),
             start_to_close_timeout=timedelta(seconds=30),
             heartbeat_timeout=timedelta(seconds=10),

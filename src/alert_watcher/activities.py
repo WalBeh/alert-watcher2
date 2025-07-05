@@ -21,7 +21,7 @@ from .models import ActivityResult
 logger = structlog.get_logger(__name__)
 
 
-@activity.defn
+@activity.defn(name="log_alert")
 async def log_alert(signal_data: Dict[str, Any]) -> Dict[str, Any]:
     """
     Log the alert data structure to understand the format.
@@ -40,12 +40,13 @@ async def log_alert(signal_data: Dict[str, Any]) -> Dict[str, Any]:
         from .models import AlertProcessingSignal
         signal_payload = AlertProcessingSignal(**signal_data)
         alert_data = signal_payload.alert_data
+        alert_name = alert_data.labels.alertname
         
         # Create a comprehensive log entry with all alert data
         current_time = datetime.fromtimestamp(time.time())
         log_entry = {
             "timestamp": current_time.isoformat() + "Z",
-            "event": "alert_received",
+            "event": f"{alert_name}_alert_received",
             "alert_id": signal_payload.alert_id,
             "processing_id": signal_payload.processing_id,
             "alert_data": {
@@ -59,12 +60,12 @@ async def log_alert(signal_data: Dict[str, Any]) -> Dict[str, Any]:
             }
         }
         
-        # Log the complete alert structure
+        # Log the complete alert structure with alert name prominently featured
         logger.info(
-            "Alert received and logged",
+            f"{alert_name} alert received and logged",
             alert_id=signal_payload.alert_id,
             processing_id=signal_payload.processing_id,
-            alert_name=alert_data.labels.alertname,
+            alert_name=alert_name,
             namespace=alert_data.labels.namespace,
             pod=alert_data.labels.pod,
             full_alert_data=log_entry
@@ -72,16 +73,16 @@ async def log_alert(signal_data: Dict[str, Any]) -> Dict[str, Any]:
         
         # Also log as pretty-printed JSON for easy reading
         print("\n" + "="*80)
-        print("ALERT DATA STRUCTURE:")
+        print(f"{alert_name.upper()} ALERT DATA STRUCTURE:")
         print("="*80)
         print(json.dumps(log_entry, indent=2, default=str))
         print("="*80 + "\n")
         
         return ActivityResult.success_result(
-            message=f"Alert {signal_payload.alert_id} logged successfully",
+            message=f"{alert_name} alert {signal_payload.alert_id} logged successfully",
             data={
                 "alert_id": signal_payload.alert_id,
-                "alert_name": alert_data.labels.alertname,
+                "alert_name": alert_name,
                 "namespace": alert_data.labels.namespace,
                 "pod": alert_data.labels.pod,
                 "logged_at": current_time.isoformat() + "Z"
@@ -101,3 +102,38 @@ async def log_alert(signal_data: Dict[str, Any]) -> Dict[str, Any]:
             message=error_msg,
             data={"error_type": type(e).__name__}
         ).dict()
+
+
+# Dynamic activity factory for creating alert-specific activities
+def create_alert_activity(alert_name: str):
+    """
+    Create a dynamically named activity for a specific alert type.
+    
+    Args:
+        alert_name: The name of the alert type
+        
+    Returns:
+        An activity function named after the alert
+    """
+    @activity.defn(name=f"log_{alert_name.lower()}_alert")
+    async def log_specific_alert(signal_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Log a specific alert type.
+        
+        Args:
+            signal_data: The alert signal data dictionary
+            
+        Returns:
+            ActivityResult dictionary with success status and message
+        """
+        return await log_alert(signal_data)
+    
+    return log_specific_alert
+
+
+# Pre-create some common alert activities
+log_cratedb_alert = create_alert_activity("CrateDB")
+log_prometheus_alert = create_alert_activity("Prometheus")
+log_node_alert = create_alert_activity("Node")
+log_pod_alert = create_alert_activity("Pod")
+log_service_alert = create_alert_activity("Service")

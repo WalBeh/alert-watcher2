@@ -26,7 +26,7 @@ class Config(BaseSettings):
     temporal_task_queue: str = Field(default="alert-processing", description="Temporal task queue")
     
     # Workflow Configuration
-    workflow_id: str = Field(default="alert-processor", description="Main workflow ID")
+    workflow_id: str = Field(default="alert-watcher2", description="Main workflow ID")
     workflow_timeout_seconds: int = Field(default=3600, description="Workflow timeout in seconds")
     activity_timeout_seconds: int = Field(default=300, description="Activity timeout in seconds")
     

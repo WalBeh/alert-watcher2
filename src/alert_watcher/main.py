@@ -18,7 +18,14 @@ from temporalio.worker import Worker
 from .config import config
 from .webhook import app
 from .workflows import AlertProcessingWorkflow
-from .activities import log_alert
+from .activities import (
+    log_alert,
+    log_cratedb_alert,
+    log_prometheus_alert,
+    log_node_alert,
+    log_pod_alert,
+    log_service_alert
+)
 
 
 # Configure structured logging
@@ -51,6 +58,7 @@ class AlertWatcherApp:
         self.worker: Optional[Worker] = None
         self.running = False
         self.shutdown_event = asyncio.Event()
+        self.server: Optional[uvicorn.Server] = None
 
     async def initialize(self):
         """Initialize the application components."""
@@ -96,12 +104,19 @@ class AlertWatcherApp:
     async def start_temporal_worker(self):
         """Start the Temporal worker for processing workflows and activities."""
         try:
-            # Create worker with just the log_alert activity
+            # Create worker with all alert activities
             self.worker = Worker(
                 self.temporal_client,
                 task_queue=config.temporal_task_queue,
                 workflows=[AlertProcessingWorkflow],
-                activities=[log_alert]
+                activities=[
+                    log_alert,
+                    log_cratedb_alert,
+                    log_prometheus_alert,
+                    log_node_alert,
+                    log_pod_alert,
+                    log_service_alert
+                ]
             )
 
             # Start worker in background
@@ -110,7 +125,14 @@ class AlertWatcherApp:
             logger.info(
                 "Temporal worker started",
                 task_queue=config.temporal_task_queue,
-                activities=["log_alert"],
+                activities=[
+                    "log_alert",
+                    "log_cratedb_alert",
+                    "log_prometheus_alert",
+                    "log_node_alert",
+                    "log_pod_alert",
+                    "log_service_alert"
+                ],
                 workflows=["AlertProcessingWorkflow"]
             )
 
@@ -180,7 +202,9 @@ class AlertWatcherApp:
                 "Received shutdown signal",
                 signal=signum
             )
-            asyncio.create_task(self.shutdown())
+            self.shutdown_event.set()
+            if self.server:
+                self.server.should_exit = True
 
         signal.signal(signal.SIGINT, signal_handler)
         signal.signal(signal.SIGTERM, signal_handler)
@@ -201,7 +225,7 @@ class AlertWatcherApp:
                 access_log=True
             )
 
-            server = uvicorn.Server(server_config)
+            self.server = uvicorn.Server(server_config)
 
             logger.info(
                 "Starting webhook server",
@@ -210,7 +234,7 @@ class AlertWatcherApp:
             )
 
             # Run server until shutdown
-            await server.serve()
+            await self.server.serve()
 
         except Exception as e:
             logger.error(
@@ -248,10 +272,18 @@ class AlertWatcherApp:
         self.running = False
         self.shutdown_event.set()
 
-        # Stop Temporal worker
+        # Stop webhook server
+        if self.server:
+            logger.info("Stopping webhook server")
+            self.server.should_exit = True
+
+        # Stop Temporal worker with timeout
         if self.worker:
             logger.info("Stopping Temporal worker")
-            await self.worker.shutdown()
+            try:
+                await asyncio.wait_for(self.worker.shutdown(), timeout=5.0)
+            except asyncio.TimeoutError:
+                logger.warning("Temporal worker shutdown timed out")
 
         # Close Temporal client
         if self.temporal_client:
@@ -275,15 +307,38 @@ async def main():
     app_instance = AlertWatcherApp()
 
     try:
-        await app_instance.run()
+        # Run the application
+        server_task = asyncio.create_task(app_instance.run())
+        
+        # Wait for either the server to complete or shutdown signal
+        done, pending = await asyncio.wait(
+            [server_task, asyncio.create_task(app_instance.shutdown_event.wait())],
+            return_when=asyncio.FIRST_COMPLETED
+        )
+        
+        # If shutdown was triggered, perform cleanup
+        if app_instance.shutdown_event.is_set():
+            logger.info("Shutdown signal received, stopping application")
+            await app_instance.shutdown()
+            
+        # Cancel any pending tasks
+        for task in pending:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+                
     except KeyboardInterrupt:
         logger.info("Application interrupted by user")
+        await app_instance.shutdown()
     except Exception as e:
         logger.error(
             "Application failed",
             error=str(e),
             exc_info=True
         )
+        await app_instance.shutdown()
         sys.exit(1)
 
 

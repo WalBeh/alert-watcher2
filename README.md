@@ -35,10 +35,52 @@ The goal is to understand how AlertManager labels look for CrateDB alerts by log
                                                        │
                                                        ▼
                                               ┌─────────────────┐
-                                              │   log_alert     │
-                                              │   Activity      │
+                                              │   Alert-Specific│
+                                              │   Activities    │
                                               └─────────────────┘
 ```
+
+## Recent Changes
+
+### Naming Improvements (Latest)
+
+**Workflow Name**: Changed from `alert-processor` to `alert-watcher2`
+- Easily configurable via `WORKFLOW_ID` environment variable
+- More descriptive and matches the project name
+
+**Activity Names**: Now use alert-specific names instead of generic `log_alert`
+- `CrateDB` alerts → `log_cratedb_alert`
+- `Prometheus` alerts → `log_prometheus_alert`
+- `Node` alerts → `log_node_alert`
+- Custom alerts fallback to generic `log_alert`
+
+**Enhanced Logging**: Alert names are now prominently featured in all log messages
+- Log messages: `"CrateDB alert received and logged"`
+- Console output: `"CRATEDB ALERT DATA STRUCTURE"`
+- Activity results: `"CrateDB alert abc123 logged successfully"`
+
+For detailed information, see [NAMING_CHANGES.md](NAMING_CHANGES.md)
+
+### Activity Fallback Fix (Latest)
+
+**Problem**: Complex alert names like `CrateDBContainerRestart` were causing activity registration errors
+**Solution**: Implemented proactive activity routing with fallback mechanism
+- Complex alert names → `log_alert` (generic fallback)
+- Simple alert names → specific activities (e.g., `log_cratedb_alert`)
+- No more "activity not registered" errors
+
+For detailed information, see [ACTIVITY_FALLBACK_FIX.md](ACTIVITY_FALLBACK_FIX.md)
+
+### Shutdown Fix (Latest)
+
+**Problem**: Application was hanging during shutdown, requiring multiple Ctrl+C to terminate
+**Solution**: Improved graceful shutdown mechanism with proper coordination
+- Signal handler sets shutdown event and controls server directly
+- Added timeout to Temporal worker shutdown (5 seconds)
+- Better task coordination and cleanup
+- Single Ctrl+C now shuts down gracefully
+
+For detailed information, see [SHUTDOWN_FIX.md](SHUTDOWN_FIX.md)
 
 ## Quick Start
 
