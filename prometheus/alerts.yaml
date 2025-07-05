@@ -1,0 +1,270 @@
+# Prometheus Alert Rules for CrateDB Monitoring
+# These alerts are designed to test the Alert Watcher 2 system
+
+groups:
+  - name: cratedb.rules
+    rules:
+      # CrateDBCloudNotResponsive - Critical alert for unresponsive clusters
+      - alert: CrateDBCloudNotResponsive
+        expr: up{job="crate-monitoring"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          alertname: CrateDBCloudNotResponsive
+          namespace: "4cc4dc86-b624-4947-87c8-b5f5a2607536"
+          pod: "crate-data-hot-12345"
+          kube_context: "us-west-2"
+          sts: "5ccc5dc86-b624-4555-xxxx-xxxxxxx"
+          instance: "crate-data-hot-12345:4200"
+          job: "crate-monitoring"
+          team: "sre"
+          service: "cratedb"
+        annotations:
+          summary: "CrateDB cluster is not responsive"
+          description: "CrateDB cluster in namespace {{ $labels.namespace }} is not responding to health checks for more than 2 minutes. Pod {{ $labels.pod }} appears to be down."
+          runbook_url: "https://runbooks.example.com/cratedb-not-responsive"
+          impact: "High - Database operations are unavailable"
+          action_required: "Immediate investigation and JFR collection required"
+
+      # CrateDBContainerRestart - Warning alert for unexpected restarts
+      - alert: CrateDBContainerRestart
+        expr: increase(kube_pod_container_status_restarts_total{pod=~"crate-.*"}[5m]) > 0
+        for: 1m
+        labels:
+          severity: warning
+          alertname: CrateDBContainerRestart
+          namespace: "test-namespace"
+          pod: "crate-data-hot-67890"
+          kube_context: "us-east-1"
+          sts: "crate-statefulset-123"
+          instance: "crate-data-hot-67890:4200"
+          job: "crate-monitoring"
+          team: "sre"
+          service: "cratedb"
+        annotations:
+          summary: "CrateDB container restarted unexpectedly"
+          description: "CrateDB container {{ $labels.pod }} in namespace {{ $labels.namespace }} has restarted {{ $value }} times in the last 5 minutes."
+          runbook_url: "https://runbooks.example.com/cratedb-container-restart"
+          impact: "Medium - Potential service disruption during restart"
+          action_required: "Investigate restart cause and collect JFR data"
+
+  - name: cratedb.test.rules
+    rules:
+      # Test variations for comprehensive testing
+
+      # High load scenario
+      - alert: CrateDBCloudNotResponsive
+        expr: crate_cluster_health{cluster="production"} == 0
+        for: 30s
+        labels:
+          severity: critical
+          alertname: CrateDBCloudNotResponsive
+          namespace: "prod-cratedb-cluster"
+          pod: "crate-data-0"
+          kube_context: "production-cluster"
+          sts: "crate-data"
+          instance: "crate-data-0:4200"
+          job: "crate-monitoring"
+          team: "platform"
+          service: "cratedb"
+          environment: "production"
+        annotations:
+          summary: "Production CrateDB cluster health check failed"
+          description: "Production CrateDB cluster health is critical. All nodes may be unresponsive."
+          runbook_url: "https://runbooks.example.com/cratedb-production-down"
+          impact: "Critical - Production database unavailable"
+          action_required: "Emergency response required"
+
+      # Memory pressure restart
+      - alert: CrateDBContainerRestart
+        expr: increase(kube_pod_container_status_restarts_total{container="crate"}[2m]) > 0
+        for: 30s
+        labels:
+          severity: warning
+          alertname: CrateDBContainerRestart
+          namespace: "staging-cratedb"
+          pod: "crate-hot-1"
+          kube_context: "staging-cluster"
+          sts: "crate-hot"
+          instance: "crate-hot-1:4200"
+          job: "crate-monitoring"
+          team: "dev"
+          service: "cratedb"
+          environment: "staging"
+          restart_reason: "memory_pressure"
+        annotations:
+          summary: "CrateDB container restarted due to memory pressure"
+          description: "CrateDB container {{ $labels.pod }} restarted due to memory pressure in staging environment."
+          runbook_url: "https://runbooks.example.com/cratedb-memory-restart"
+          impact: "Low - Staging environment affected"
+          action_required: "Monitor memory usage patterns"
+
+      # Multi-node cluster issue
+      - alert: CrateDBCloudNotResponsive
+        expr: count(up{job="crate-monitoring"} == 0) > 1
+        for: 1m
+        labels:
+          severity: critical
+          alertname: CrateDBCloudNotResponsive
+          namespace: "multi-node-cluster"
+          pod: "crate-master-0"
+          kube_context: "multi-az-cluster"
+          sts: "crate-master"
+          instance: "crate-master-0:4200"
+          job: "crate-monitoring"
+          team: "sre"
+          service: "cratedb"
+          environment: "production"
+          cluster_size: "5"
+        annotations:
+          summary: "Multiple CrateDB nodes unresponsive"
+          description: "{{ $value }} CrateDB nodes are unresponsive in multi-node cluster."
+          runbook_url: "https://runbooks.example.com/cratedb-multi-node-failure"
+          impact: "Critical - Cluster quorum may be lost"
+          action_required: "Immediate cluster health assessment required"
+
+      # Frequent restart pattern
+      - alert: CrateDBContainerRestart
+        expr: increase(kube_pod_container_status_restarts_total{pod=~"crate-.*"}[10m]) > 3
+        for: 2m
+        labels:
+          severity: warning
+          alertname: CrateDBContainerRestart
+          namespace: "unstable-cluster"
+          pod: "crate-unstable-2"
+          kube_context: "test-cluster"
+          sts: "crate-unstable"
+          instance: "crate-unstable-2:4200"
+          job: "crate-monitoring"
+          team: "qa"
+          service: "cratedb"
+          environment: "test"
+          restart_pattern: "frequent"
+        annotations:
+          summary: "CrateDB container experiencing frequent restarts"
+          description: "CrateDB container {{ $labels.pod }} has restarted {{ $value }} times in 10 minutes."
+          runbook_url: "https://runbooks.example.com/cratedb-frequent-restarts"
+          impact: "Medium - Service instability detected"
+          action_required: "Investigate underlying stability issues"
+
+  - name: cratedb.edge.cases
+    rules:
+      # Edge case: Very long namespace name
+      - alert: CrateDBCloudNotResponsive
+        expr: up{job="crate-monitoring",namespace=~"very-long-namespace.*"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          alertname: CrateDBCloudNotResponsive
+          namespace: "very-long-namespace-with-many-hyphens-and-numbers-12345678"
+          pod: "crate-data-with-very-long-name-12345"
+          kube_context: "long-cluster-name-context"
+          sts: "very-long-statefulset-name-with-version-v1-2-3"
+          instance: "crate-data-with-very-long-name-12345:4200"
+          job: "crate-monitoring"
+          team: "edge-case-testing"
+          service: "cratedb"
+        annotations:
+          summary: "CrateDB cluster with long names not responsive"
+          description: "Testing edge case with very long resource names."
+          runbook_url: "https://runbooks.example.com/cratedb-edge-cases"
+
+      # Edge case: Minimal required fields
+      - alert: CrateDBContainerRestart
+        expr: increase(kube_pod_container_status_restarts_total[1m]) > 0
+        for: 10s
+        labels:
+          severity: warning
+          alertname: CrateDBContainerRestart
+          namespace: "minimal"
+          pod: "crate-min"
+          kube_context: "min"
+          sts: "min-sts"
+          instance: "crate-min:4200"
+          job: "crate-monitoring"
+        annotations:
+          summary: "Minimal CrateDB restart test"
+          description: "Testing with minimal required fields."
+
+      # Edge case: Special characters in names
+      - alert: CrateDBCloudNotResponsive
+        expr: up{job="crate-monitoring"} == 0
+        for: 30s
+        labels:
+          severity: critical
+          alertname: CrateDBCloudNotResponsive
+          namespace: "special-chars-123_test"
+          pod: "crate-data-special_123"
+          kube_context: "cluster-with_underscores"
+          sts: "sts-with-special_chars_123"
+          instance: "crate-data-special_123:4200"
+          job: "crate-monitoring"
+          special_label: "test_with_underscores_and_123"
+        annotations:
+          summary: "Testing special characters in labels"
+          description: "Edge case testing with special characters in resource names."
+          runbook_url: "https://runbooks.example.com/special-chars"
+
+  - name: cratedb.load.test
+    rules:
+      # Load testing alerts - multiple simultaneous alerts
+      - alert: CrateDBCloudNotResponsive
+        expr: up{job="crate-monitoring",pod=~"load-test-.*"} == 0
+        for: 10s
+        labels:
+          severity: critical
+          alertname: CrateDBCloudNotResponsive
+          namespace: "load-test-namespace"
+          pod: "load-test-pod-{{ $labels.instance }}"
+          kube_context: "load-test-cluster"
+          sts: "load-test-sts"
+          instance: "{{ $labels.instance }}"
+          job: "crate-monitoring"
+          test_type: "load_test"
+          batch_id: "load-test-batch-001"
+        annotations:
+          summary: "Load test CrateDB pod not responsive"
+          description: "Load testing pod {{ $labels.pod }} is not responsive."
+          runbook_url: "https://runbooks.example.com/load-test"
+
+      - alert: CrateDBContainerRestart
+        expr: increase(kube_pod_container_status_restarts_total{pod=~"load-test-.*"}[30s]) > 0
+        for: 5s
+        labels:
+          severity: warning
+          alertname: CrateDBContainerRestart
+          namespace: "load-test-namespace"
+          pod: "load-test-restart-{{ $labels.instance }}"
+          kube_context: "load-test-cluster"
+          sts: "load-test-restart-sts"
+          instance: "{{ $labels.instance }}"
+          job: "crate-monitoring"
+          test_type: "restart_load_test"
+          batch_id: "restart-test-batch-001"
+        annotations:
+          summary: "Load test CrateDB container restarted"
+          description: "Load testing container {{ $labels.pod }} has restarted."
+          runbook_url: "https://runbooks.example.com/restart-load-test"
+
+  - name: cratedb.recovery.test
+    rules:
+      # Recovery testing - alerts that resolve quickly
+      - alert: CrateDBCloudNotResponsive
+        expr: up{job="crate-monitoring",pod="recovery-test-pod"} == 0
+        for: 5s
+        labels:
+          severity: critical
+          alertname: CrateDBCloudNotResponsive
+          namespace: "recovery-test"
+          pod: "recovery-test-pod"
+          kube_context: "recovery-cluster"
+          sts: "recovery-sts"
+          instance: "recovery-test-pod:4200"
+          job: "crate-monitoring"
+          test_type: "recovery_test"
+          expected_duration: "short"
+        annotations:
+          summary: "Recovery test - CrateDB pod not responsive"
+          description: "Testing rapid recovery scenario for pod {{ $labels.pod }}."
+          runbook_url: "https://runbooks.example.com/recovery-test"
+          expected_action: "Should auto-recover within 30 seconds"
