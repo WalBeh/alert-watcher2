@@ -35,10 +35,39 @@ line-length = 88
 target-version = ['py312']
 
 [tool.ruff]
-select = ["E", "F", "I", "N", "W", "UP"]
-ignore = []
 line-length = 88
 target-version = "py312"
+fix = true
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "N",   # pep8-naming
+    "UP",  # pyupgrade
+    "C4",  # flake8-comprehensions
+    "B",   # flake8-bugbear
+    "A",   # flake8-builtins
+    "PLE", # pylint errors
+    "PLW", # pylint warnings
+    "RUF", # ruff specific
+]
+ignore = [
+    "E501", # line too long, handled by formatter
+    "B008", # do not perform function calls in argument defaults
+    "A003", # class attribute is shadowing a python builtin
+]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "auto"
+
+[tool.ruff.lint.isort]
+known-first-party = ["alert_watcher"]
 
 [tool.mypy]
 python_version = "3.12"

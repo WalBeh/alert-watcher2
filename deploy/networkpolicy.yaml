@@ -1,0 +1,62 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: alert-watcher2-network-policy
+  namespace: default
+  labels:
+    app: alert-watcher2
+spec:
+  podSelector:
+    matchLabels:
+      app: alert-watcher2
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allow ingress from same namespace for service discovery
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: default
+      ports:
+        - protocol: TCP
+          port: 8000
+    # Allow ingress from monitoring systems (Prometheus, etc.)
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: monitoring
+        - podSelector:
+            matchLabels:
+              app: prometheus
+      ports:
+        - protocol: TCP
+          port: 8000
+  egress:
+    # Allow egress to Temporal server
+    - to:
+        - podSelector:
+            matchLabels:
+              app: temporal-frontend
+      ports:
+        - protocol: TCP
+          port: 7233
+    # Allow egress to DNS for service discovery
+    - to: []
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # Allow egress to external APIs (for hemako commands)
+    - to: []
+      ports:
+        - protocol: TCP
+          port: 80
+        - protocol: TCP
+          port: 443
+    # Allow egress to Kubernetes API server
+    - to: []
+      ports:
+        - protocol: TCP
+          port: 443
