@@ -1,231 +1,286 @@
-# Alert Watcher 2 - Simplified
+# Alert Watcher 2 - Simplified CrateDB Alert Processing System
 
-A dramatically simplified alert processing system that receives AlertManager webhooks and logs the alert data structure.
+A simplified alert processing system that handles only specific CrateDB alerts and processes them through Temporal workflows with sub-workflow architecture.
 
-## Overview
+## 🎯 Overview
 
-This system implements a minimal pipeline:
-**Alertmanager → Webhook → Signal → Workflow → Activity (log JSON)**
+Alert Watcher 2 is designed to process only two specific CrateDB alert types:
+- `CrateDBContainerRestart` - Container restart events
+- `CrateDBCloudNotResponsive` - Cloud connectivity issues
 
-The goal is to understand how AlertManager labels look for CrateDB alerts by logging the complete JSON data structure.
+Each alert triggers a dedicated sub-workflow that will eventually execute `hemako` commands with different parameters based on the alert type.
 
-## What was removed
+## 🏗️ Architecture
 
-- Complex S3 upload logic
-- Complex JFR collection with `hemako` commands
-- Alert type validation and filtering
-- Complex retry logic and error handling
-- Performance monitoring and metrics
-- Test infrastructure
+### Main Components
 
-## What remains
+1. **FastAPI Webhook Server** - Receives AlertManager webhooks
+2. **Main Temporal Workflow** - Orchestrates alert processing
+3. **Sub-Workflows** - Process individual alerts (one per alert)
+4. **Hemako Activity** - Executes commands (placeholder implementation)
 
-- FastAPI webhook server to receive AlertManager webhooks
-- Temporal workflow to process alerts
-- Simple activity that logs the complete alert JSON structure
-- Basic health/readiness endpoints
-
-## Architecture
+### Workflow Structure
 
 ```
-┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│   AlertManager  │───▶│   Webhook       │───▶│   Temporal      │
-│                 │    │   (FastAPI)     │    │   Workflow      │
-└─────────────────┘    └─────────────────┘    └─────────────────┘
-                                                       │
-                                                       ▼
-                                              ┌─────────────────┐
-                                              │   Alert-Specific│
-                                              │   Activities    │
-                                              └─────────────────┘
+AlertManager Webhook
+       ↓
+  Filter Alerts (only CrateDB types)
+       ↓
+  Main Workflow (AlertProcessingWorkflow)
+       ↓
+  Sub-Workflow per Alert (CrateDBAlertSubWorkflow)
+       ↓
+  Hemako Activity (execute_hemako_command)
 ```
 
-## Recent Changes
+### Sub-Workflow Naming
 
-### Naming Improvements (Latest)
+Each sub-workflow is named with the pattern: `{AlertName}-{Namespace}-{UUID}`
 
-**Workflow Name**: Changed from `alert-processor` to `alert-watcher2`
-- Easily configurable via `WORKFLOW_ID` environment variable
-- More descriptive and matches the project name
+Examples:
+- `CrateDBContainerRestart-cratedb-prod-abc123`
+- `CrateDBCloudNotResponsive-cratedb-staging-def456`
 
-**Activity Names**: Now use alert-specific names instead of generic `log_alert`
-- `CrateDB` alerts → `log_cratedb_alert`
-- `Prometheus` alerts → `log_prometheus_alert`
-- `Node` alerts → `log_node_alert`
-- Custom alerts fallback to generic `log_alert`
+## 🚀 Quick Start
 
-**Enhanced Logging**: Alert names are now prominently featured in all log messages
-- Log messages: `"CrateDB alert received and logged"`
-- Console output: `"CRATEDB ALERT DATA STRUCTURE"`
-- Activity results: `"CrateDB alert abc123 logged successfully"`
+### Prerequisites
 
-For detailed information, see [NAMING_CHANGES.md](NAMING_CHANGES.md)
+1. **Python 3.8+** with pip or uv
+2. **Temporal Server** running locally
+3. **AlertManager** (optional, for real alerts)
 
-### Activity Fallback Fix (Latest)
+### Installation
 
-**Problem**: Complex alert names like `CrateDBContainerRestart` were causing activity registration errors
-**Solution**: Implemented proactive activity routing with fallback mechanism
-- Complex alert names → `log_alert` (generic fallback)
-- Simple alert names → specific activities (e.g., `log_cratedb_alert`)
-- No more "activity not registered" errors
-
-For detailed information, see [ACTIVITY_FALLBACK_FIX.md](ACTIVITY_FALLBACK_FIX.md)
-
-### Shutdown Fix (Latest)
-
-**Problem**: Application was hanging during shutdown, requiring multiple Ctrl+C to terminate
-**Solution**: Improved graceful shutdown mechanism with proper coordination
-- Signal handler sets shutdown event and controls server directly
-- Added timeout to Temporal worker shutdown (5 seconds)
-- Better task coordination and cleanup
-- Single Ctrl+C now shuts down gracefully
-
-For detailed information, see [SHUTDOWN_FIX.md](SHUTDOWN_FIX.md)
-
-## Quick Start
-
-1. **Install dependencies:**
-   ```bash
-   uv sync
-   ```
-
-2. **Start Temporal server** (if not already running):
-   ```bash
-   # Using Docker
-   docker run -p 7233:7233 -p 8233:8233 temporalio/auto-setup:latest
-   ```
-
-3. **Run the application:**
-   ```bash
-   uv run python -m src.alert_watcher.main
-   ```
-
-4. **Test with sample data:**
-   ```bash
-   uv run python test_simplified.py
-   ```
-
-## Configuration
-
-Environment variables:
-- `HOST`: Server host (default: 0.0.0.0)
-- `PORT`: Server port (default: 8000)
-- `LOG_LEVEL`: Logging level (default: INFO)
-- `TEMPORAL_HOST`: Temporal server host (default: localhost)
-- `TEMPORAL_PORT`: Temporal server port (default: 7233)
-
-## Endpoints
-
-- `GET /health` - Health check
-- `GET /ready` - Readiness check (includes Temporal connection)
-- `POST /webhook/alertmanager` - AlertManager webhook endpoint
-- `POST /test/alert` - Test endpoint for manual testing
-
-## Sample AlertManager Webhook
-
-The system expects standard AlertManager webhook payloads like:
-
-```json
-{
-  "version": "4",
-  "groupKey": "{}:{alertname=\"CrateDBCloudNotResponsive\"}",
-  "status": "firing",
-  "receiver": "webhook",
-  "alerts": [
-    {
-      "status": "firing",
-      "labels": {
-        "alertname": "CrateDBCloudNotResponsive",
-        "namespace": "cratedb-cloud",
-        "pod": "crate-data-0",
-        "kube_context": "prod-cluster-1",
-        "sts": "crate-data",
-        "severity": "critical"
-      },
-      "annotations": {
-        "summary": "CrateDB Cloud instance is not responsive",
-        "description": "Instance is not responding to health checks"
-      },
-      "startsAt": "2024-01-01T12:00:00Z"
-    }
-  ]
-}
+1. Clone and navigate to the project:
+```bash
+git clone <repository-url>
+cd alert-watcher2
 ```
 
-## What gets logged
+2. Install dependencies:
+```bash
+# Using pip
+pip install -r requirements.txt
 
-When an alert is received, the system logs the complete alert structure including:
-- Alert metadata (status, timestamps, fingerprint)
-- All labels (alertname, namespace, pod, kube_context, etc.)
-- All annotations (summary, description, runbook_url, etc.)
-- Processing metadata (alert_id, processing_id, timestamps)
-
-Example log output:
-```json
-{
-  "timestamp": "2024-01-01T12:00:00Z",
-  "event": "alert_received",
-  "alert_id": "CrateDBCloudNotResponsive-cratedb-cloud-crate-data-0-uuid",
-  "processing_id": "correlation-uuid",
-  "alert_data": {
-    "status": "firing",
-    "labels": {
-      "alertname": "CrateDBCloudNotResponsive",
-      "namespace": "cratedb-cloud",
-      "pod": "crate-data-0",
-      "kube_context": "prod-cluster-1",
-      "sts": "crate-data",
-      "severity": "critical",
-      "instance": "crate-data-0.crate-data.cratedb-cloud.svc.cluster.local:4200",
-      "job": "cratedb-monitoring"
-    },
-    "annotations": {
-      "summary": "CrateDB Cloud instance is not responsive",
-      "description": "Instance is not responding to health checks",
-      "runbook_url": "https://docs.cratedb.com/troubleshooting/not-responsive"
-    },
-    "startsAt": "2024-01-01T12:00:00Z",
-    "endsAt": null,
-    "generatorURL": "http://prometheus:9090/...",
-    "fingerprint": "abc123def456"
-  }
-}
+# Using uv
+uv sync
 ```
 
-## Development
+### Running the System
 
-The system is intentionally simple for easy understanding and modification:
+1. **Start Temporal Server**:
+```bash
+temporal server start-dev
+```
 
-- `webhook.py` - FastAPI server and webhook handling
-- `workflows.py` - Temporal workflow (just calls log activity)
-- `activities.py` - Single activity that logs alert data
-- `models.py` - Pydantic models for AlertManager webhooks
-- `config.py` - Configuration management
-- `main.py` - Application entry point
+2. **Start Alert Watcher 2**:
+```bash
+python -m src.alert_watcher.main
+```
 
-## Next Steps
+3. **Verify the system** (in another terminal):
+```bash
+python test_simplified_cratedb.py
+```
 
-Once you understand the alert label structure from the logs, you can:
-1. Add back specific alert type filtering
-2. Implement `hemako jfr collect` commands based on the labels
-3. Add proper error handling and retry logic
-4. Implement S3 upload for JFR files
-5. Add monitoring and metrics
+## 📋 Supported Alert Types
 
-The current system provides a clean foundation for understanding AlertManager webhook structure and building upon it incrementally.
+### CrateDBContainerRestart
+- **Trigger**: Container restart events
+- **Hemako Command**: `hemako jfr --jfr --namespace {namespace} --pod {pod}`
+- **Use Case**: Collect JFR data after restart
 
-## Development with uv
+### CrateDBCloudNotResponsive
+- **Trigger**: Cloud connectivity issues
+- **Hemako Command**: `hemako jfr --crash-heapdump-upload --namespace {namespace} --pod {pod}`
+- **Use Case**: Upload crash heap dumps
 
-This project uses [uv](https://docs.astral.sh/uv/) for dependency management:
+## 🔧 Configuration
+
+### Environment Variables
 
 ```bash
-# Install dependencies
-uv sync
+# Server Configuration
+ALERT_WATCHER_HOST=0.0.0.0
+ALERT_WATCHER_PORT=8000
+ALERT_WATCHER_LOG_LEVEL=INFO
 
-# Run the application
-uv run python -m src.alert_watcher.main
-
-# Run tests
-uv run python test_simplified.py
-uv run python run_example.py
+# Temporal Configuration
+TEMPORAL_HOST=localhost
+TEMPORAL_PORT=7233
+TEMPORAL_NAMESPACE=default
+TEMPORAL_TASK_QUEUE=alert-watcher2-tasks
+WORKFLOW_ID=alert-watcher2-main
 ```
+
+### AlertManager Configuration
+
+Add to your `alertmanager.yml`:
+
+```yaml
+route:
+  group_by: ['alertname', 'namespace']
+  group_wait: 10s
+  group_interval: 10s
+  repeat_interval: 1h
+  receiver: 'alert-watcher2'
+  routes:
+    - match:
+        alertname: CrateDBContainerRestart
+      receiver: 'alert-watcher2'
+    - match:
+        alertname: CrateDBCloudNotResponsive
+      receiver: 'alert-watcher2'
+
+receivers:
+  - name: 'alert-watcher2'
+    webhook_configs:
+      - url: 'http://localhost:8000/webhook/alertmanager'
+        send_resolved: true
+```
+
+## 🧪 Testing
+
+### Manual Testing
+
+Run the comprehensive test suite:
+```bash
+python test_simplified_cratedb.py
+```
+
+### Test Individual Alerts
+
+```bash
+# Test CrateDBContainerRestart
+curl -X POST http://localhost:8000/webhook/alertmanager \
+  -H "Content-Type: application/json" \
+  -d @test_data/cratedb_restart_alert.json
+
+# Test CrateDBCloudNotResponsive
+curl -X POST http://localhost:8000/webhook/alertmanager \
+  -H "Content-Type: application/json" \
+  -d @test_data/cratedb_cloud_alert.json
+```
+
+### Health Checks
+
+```bash
+# Health check
+curl http://localhost:8000/health
+
+# Readiness check
+curl http://localhost:8000/ready
+```
+
+## 📊 Monitoring
+
+### Temporal UI
+- URL: http://localhost:8233
+- View workflows, activities, and execution history
+- Monitor sub-workflow executions
+
+### Logs
+- Structured JSON logging
+- Correlation IDs for tracking
+- Activity execution details
+
+### Metrics
+- Processed alerts count
+- Rejected alerts count
+- Error rates per alert type
+
+## 🔍 Troubleshooting
+
+### Common Issues
+
+1. **Connection Refused**
+   - Ensure Temporal server is running: `temporal server start-dev`
+   - Check port 7233 is available
+
+2. **Alerts Not Processing**
+   - Verify AlertManager webhook configuration
+   - Check logs for filtering/rejection messages
+   - Confirm alert names match exactly
+
+3. **Sub-Workflows Not Starting**
+   - Check Temporal UI for workflow errors
+   - Verify activity registration
+   - Review correlation IDs in logs
+
+### Debug Mode
+
+Start with debug logging:
+```bash
+ALERT_WATCHER_LOG_LEVEL=DEBUG python -m src.alert_watcher.main
+```
+
+## 📁 Project Structure
+
+```
+alert-watcher2/
+├── src/
+│   └── alert_watcher/
+│       ├── __init__.py
+│       ├── main.py              # Application entry point
+│       ├── webhook.py           # FastAPI webhook server
+│       ├── workflows.py         # Temporal workflows
+│       ├── activities.py        # Hemako activity (placeholder)
+│       ├── models.py            # Data models
+│       ├── config.py            # Configuration
+│       └── signals.py           # Signal handlers
+├── test_simplified_cratedb.py   # Test suite
+├── requirements.txt             # Dependencies
+├── pyproject.toml              # Project configuration
+└── README.md                   # This file
+```
+
+## 🔮 Future Enhancements
+
+### Planned Features
+
+1. **Real Hemako Integration**
+   - Replace placeholder with actual command execution
+   - Add command result handling
+   - Implement retry logic
+
+2. **Enhanced Monitoring**
+   - Prometheus metrics
+   - Grafana dashboards
+   - Alert success/failure tracking
+
+3. **Configuration Management**
+   - Dynamic alert type configuration
+   - Command parameter customization
+   - Environment-specific settings
+
+### Development Notes
+
+- The `execute_hemako_command` activity is currently a placeholder
+- Sub-workflows are designed to be independent and retryable
+- All alerts go through the same processing pipeline
+- Only supported alert types are processed (others are rejected)
+
+## 🤝 Contributing
+
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Add tests for new functionality
+5. Run the test suite
+6. Submit a pull request
+
+## 📝 License
+
+This project is licensed under the MIT License - see the LICENSE file for details.
+
+## 📞 Support
+
+For issues or questions:
+1. Check the troubleshooting section
+2. Review Temporal UI for workflow execution details
+3. Examine logs with correlation IDs
+4. Open an issue with reproduction steps
+
+---
+
+**Note**: This is a simplified system focused on two specific CrateDB alert types. The hemako command execution is currently a placeholder and needs to be implemented based on your specific requirements.

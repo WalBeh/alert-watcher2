@@ -1,15 +1,16 @@
 """
-FastAPI webhook server for receiving Prometheus AlertManager notifications.
+FastAPI webhook server for receiving CrateDB AlertManager notifications.
 
 This module implements a simplified HTTP server that receives AlertManager webhooks
-and forwards them as signals to Temporal workflows for logging.
+for CrateDB alerts and forwards them as signals to Temporal workflows for processing.
+Only processes CrateDBContainerRestart and CrateDBCloudNotResponsive alerts.
 """
 
 import logging
 import time
 import uuid
 from datetime import datetime
-from typing import Dict, Any
+from typing import Any
 
 import structlog
 from fastapi import FastAPI, HTTPException, Request, Response
@@ -45,14 +46,17 @@ logger = structlog.get_logger(__name__)
 # FastAPI app instance
 app = FastAPI(
     title="Alert Watcher 2",
-    description="Simplified CrateDB Alert Processing System",
+    description="CrateDB Alert Processing System - Only processes CrateDBContainerRestart and CrateDBCloudNotResponsive",
     version="0.1.0",
     docs_url="/docs",
     redoc_url="/redoc"
 )
 
 # Global Temporal client (will be initialized on startup)
-temporal_client: TemporalClient = None
+temporal_client: TemporalClient | None = None
+
+# Supported alert types - only these will be processed
+SUPPORTED_ALERTS = {"CrateDBContainerRestart", "CrateDBCloudNotResponsive"}
 
 
 @app.on_event("startup")
@@ -133,12 +137,13 @@ async def receive_alertmanager_webhook(
     request: Request
 ):
     """
-    Receive AlertManager webhook and forward alerts as signals to Temporal workflows.
+    Receive AlertManager webhook and forward CrateDB alerts as signals to Temporal workflows.
 
     This endpoint:
     1. Validates the webhook payload
-    2. Forwards each alert as a signal to the Temporal workflow
-    3. Handles workflow existence and error scenarios
+    2. Filters for supported CrateDB alert types only
+    3. Forwards each supported alert as a signal to the Temporal workflow
+    4. Rejects unsupported alert types
     """
     correlation_id = str(uuid.uuid4())
 
@@ -154,24 +159,42 @@ async def receive_alertmanager_webhook(
     )
 
     processed_alerts = []
+    rejected_alerts = []
     errors = []
 
     for alert in webhook.alerts:
+        alert_name = alert.labels.alertname
+        
+        # Check if this is a supported alert type
+        if alert_name not in SUPPORTED_ALERTS:
+            rejected_alerts.append({
+                "alert_name": alert_name,
+                "namespace": alert.labels.namespace,
+                "pod": alert.labels.pod,
+                "reason": f"Unsupported alert type. Supported: {', '.join(SUPPORTED_ALERTS)}"
+            })
+            
+            logger.info(
+                "Rejecting unsupported alert type",
+                alert_name=alert_name,
+                namespace=alert.labels.namespace,
+                pod=alert.labels.pod,
+                correlation_id=correlation_id,
+                supported_alerts=list(SUPPORTED_ALERTS)
+            )
+            continue
+
         try:
             logger.info(
-                "Processing individual alert",
-                alert_name=alert.labels.alertname,
+                "Processing supported CrateDB alert",
+                alert_name=alert_name,
+                namespace=alert.labels.namespace,
+                pod=alert.labels.pod,
                 correlation_id=correlation_id
             )
 
             # Create unique alert ID
-            alert_id = f"{alert.labels.alertname}-{alert.labels.namespace}-{alert.labels.pod}-{correlation_id}"
-
-            logger.info(
-                "Created alert ID",
-                alert_id=alert_id,
-                correlation_id=correlation_id
-            )
+            alert_id = f"{alert_name}-{alert.labels.namespace}-{alert.labels.pod}-{correlation_id}"
 
             # Create signal payload
             signal_payload = AlertProcessingSignal(
@@ -179,46 +202,35 @@ async def receive_alertmanager_webhook(
                 alert_data=alert,
                 processing_id=correlation_id
             )
-
-            logger.info(
-                "Created signal payload, about to forward",
-                alert_id=signal_payload.alert_id,
-                correlation_id=correlation_id
-            )
             
             # Forward to Temporal workflow
-            logger.info(
-                "About to forward alert signal to Temporal",
-                alert_id=signal_payload.alert_id,
-                correlation_id=correlation_id
-            )
             await forward_alert_signal(signal_payload, correlation_id)
 
             processed_alerts.append({
                 "alert_id": alert_id,
-                "alert_name": alert.labels.alertname,
+                "alert_name": alert_name,
                 "namespace": alert.labels.namespace,
                 "pod": alert.labels.pod,
                 "status": "forwarded"
             })
 
             logger.info(
-                "Alert forwarded to Temporal workflow",
+                "CrateDB alert forwarded to Temporal workflow",
                 correlation_id=correlation_id,
                 alert_id=alert_id,
-                alert_name=alert.labels.alertname,
+                alert_name=alert_name,
                 namespace=alert.labels.namespace,
                 pod=alert.labels.pod
             )
 
         except Exception as e:
-            error_msg = f"Failed to start workflow for alert {alert.labels.alertname}: {str(e)}"
+            error_msg = f"Failed to process CrateDB alert {alert_name}: {str(e)}"
             errors.append(error_msg)
 
             logger.error(
-                "Failed to process alert - detailed error",
+                "Failed to process CrateDB alert",
                 correlation_id=correlation_id,
-                alert_name=alert.labels.alertname,
+                alert_name=alert_name,
                 error=str(e),
                 error_type=type(e).__name__,
                 exc_info=True
@@ -229,7 +241,10 @@ async def receive_alertmanager_webhook(
         "correlation_id": correlation_id,
         "processed_alerts": processed_alerts,
         "processed_count": len(processed_alerts),
+        "rejected_alerts": rejected_alerts,
+        "rejected_count": len(rejected_alerts),
         "error_count": len(errors),
+        "supported_alert_types": list(SUPPORTED_ALERTS),
         "timestamp": datetime.fromtimestamp(time.time()).isoformat() + "Z"
     }
 
@@ -239,6 +254,7 @@ async def receive_alertmanager_webhook(
             "Webhook processing completed with errors",
             correlation_id=correlation_id,
             processed_count=len(processed_alerts),
+            rejected_count=len(rejected_alerts),
             error_count=len(errors)
         )
         return JSONResponse(
@@ -247,9 +263,10 @@ async def receive_alertmanager_webhook(
         )
 
     logger.info(
-        "Webhook processing completed successfully",
+        "Webhook processing completed",
         correlation_id=correlation_id,
-        processed_count=len(processed_alerts)
+        processed_count=len(processed_alerts),
+        rejected_count=len(rejected_alerts)
     )
 
     return response_data
@@ -257,9 +274,9 @@ async def receive_alertmanager_webhook(
 
 async def forward_alert_signal(signal_payload: AlertProcessingSignal, correlation_id: str):
     """
-    Forward an alert signal to the Temporal workflow.
+    Forward a CrateDB alert signal to the Temporal workflow.
     
-    This function sends an alert signal to the running Temporal workflow
+    This function sends a CrateDB alert signal to the running Temporal workflow
     for processing. The workflow should already be running.
     """
     if not temporal_client:
@@ -269,10 +286,11 @@ async def forward_alert_signal(signal_payload: AlertProcessingSignal, correlatio
     workflow_id = config.workflow_id
 
     logger.info(
-        "Sending alert signal to workflow",
+        "Sending CrateDB alert signal to workflow",
         workflow_id=workflow_id,
         correlation_id=correlation_id,
-        alert_id=signal_payload.alert_id
+        alert_id=signal_payload.alert_id,
+        alert_name=signal_payload.alert_data.labels.alertname
     )
 
     try:
@@ -286,34 +304,25 @@ async def forward_alert_signal(signal_payload: AlertProcessingSignal, correlatio
         )
 
         logger.info(
-            "Signal sent to workflow successfully",
+            "CrateDB alert signal sent to workflow successfully",
             correlation_id=correlation_id,
             workflow_id=workflow_id,
             alert_id=signal_payload.alert_id,
+            alert_name=signal_payload.alert_data.labels.alertname,
             signal_name="alert_received"
         )
 
     except Exception as e:
         logger.error(
-            "Failed to send signal to workflow",
+            "Failed to send CrateDB alert signal to workflow",
             correlation_id=correlation_id,
             workflow_id=workflow_id,
+            alert_name=signal_payload.alert_data.labels.alertname,
             error=str(e),
             error_type=type(e).__name__,
             exc_info=True
         )
-        raise RuntimeError(f"Failed to forward alert signal: {str(e)}")
-
-
-# This function is no longer needed since the workflow is started at application startup
-# async def start_workflow(correlation_id: str):
-#     """
-#     Start a new Temporal workflow instance.
-#     This function is deprecated - workflow should be started at application startup.
-#     """
-#     pass
-
-
+        raise RuntimeError(f"Failed to forward CrateDB alert signal: {str(e)}")
 
 
 @app.exception_handler(Exception)
@@ -340,20 +349,34 @@ async def global_exception_handler(request: Request, exc: Exception):
     )
 
 
-# Test endpoint for manual alert testing
+# Test endpoint for manual CrateDB alert testing
 @app.post("/test/alert")
-async def test_alert_endpoint(alert_data: Dict[str, Any]):
-    """Test endpoint for manual alert testing."""
+async def test_alert_endpoint(alert_data: dict[str, Any]):
+    """Test endpoint for manual CrateDB alert testing."""
     correlation_id = str(uuid.uuid4())
 
+    alert_name = alert_data.get("alert_name", "Unknown")
+    
+    # Check if it's a supported alert type
+    if alert_name not in SUPPORTED_ALERTS:
+        return {
+            "status": "rejected",
+            "reason": f"Unsupported alert type: {alert_name}",
+            "supported_alerts": list(SUPPORTED_ALERTS),
+            "correlation_id": correlation_id,
+            "timestamp": datetime.fromtimestamp(time.time()).isoformat() + "Z"
+        }
+
     logger.info(
-        "Test alert received",
+        "Test CrateDB alert received",
         correlation_id=correlation_id,
+        alert_name=alert_name,
         alert_data=alert_data
     )
 
     return {
         "status": "received",
+        "alert_name": alert_name,
         "correlation_id": correlation_id,
         "timestamp": datetime.fromtimestamp(time.time()).isoformat() + "Z"
     }

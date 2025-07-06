@@ -4,7 +4,7 @@ Pydantic models for AlertManager webhook payloads and internal data structures.
 This module defines the simplified data models used for alert processing.
 """
 
-from datetime import datetime, UTC
+from datetime import datetime, timezone
 import time
 from typing import Dict, List, Optional, Any, Callable
 from pydantic import BaseModel, Field
@@ -13,7 +13,7 @@ from enum import Enum
 
 def _utcnow() -> datetime:
     """Get current UTC time - isolated function for Temporal compatibility."""
-    return datetime.now(UTC)
+    return datetime.now(timezone.utc)
 
 
 class AlertStatus(str, Enum):

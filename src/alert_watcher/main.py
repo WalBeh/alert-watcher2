@@ -18,14 +18,7 @@ from temporalio.worker import Worker
 from .config import config
 from .webhook import app
 from .workflows import AlertProcessingWorkflow
-from .activities import (
-    log_alert,
-    log_cratedb_alert,
-    log_prometheus_alert,
-    log_node_alert,
-    log_pod_alert,
-    log_service_alert
-)
+from .activities import execute_hemako_command
 
 
 # Configure structured logging
@@ -54,11 +47,11 @@ class AlertWatcherApp:
     """Main application class for Alert Watcher 2."""
 
     def __init__(self):
-        self.temporal_client: Optional[TemporalClient] = None
-        self.worker: Optional[Worker] = None
+        self.temporal_client: TemporalClient | None = None
+        self.worker: Worker | None = None
         self.running = False
         self.shutdown_event = asyncio.Event()
-        self.server: Optional[uvicorn.Server] = None
+        self.server: uvicorn.Server | None = None
 
     async def initialize(self):
         """Initialize the application components."""
@@ -104,19 +97,17 @@ class AlertWatcherApp:
     async def start_temporal_worker(self):
         """Start the Temporal worker for processing workflows and activities."""
         try:
-            # Create worker with all alert activities
+            # Create worker with hemako activity and both workflows
+            from .workflows import CrateDBAlertSubWorkflow
+            
+            if self.temporal_client is None:
+                raise RuntimeError("Temporal client not initialized")
+            
             self.worker = Worker(
                 self.temporal_client,
                 task_queue=config.temporal_task_queue,
-                workflows=[AlertProcessingWorkflow],
-                activities=[
-                    log_alert,
-                    log_cratedb_alert,
-                    log_prometheus_alert,
-                    log_node_alert,
-                    log_pod_alert,
-                    log_service_alert
-                ]
+                workflows=[AlertProcessingWorkflow, CrateDBAlertSubWorkflow],
+                activities=[execute_hemako_command]
             )
 
             # Start worker in background
@@ -125,15 +116,8 @@ class AlertWatcherApp:
             logger.info(
                 "Temporal worker started",
                 task_queue=config.temporal_task_queue,
-                activities=[
-                    "log_alert",
-                    "log_cratedb_alert",
-                    "log_prometheus_alert",
-                    "log_node_alert",
-                    "log_pod_alert",
-                    "log_service_alert"
-                ],
-                workflows=["AlertProcessingWorkflow"]
+                activities=["execute_hemako_command"],
+                workflows=["AlertProcessingWorkflow", "CrateDBAlertSubWorkflow"]
             )
 
         except Exception as e:
@@ -150,6 +134,9 @@ class AlertWatcherApp:
             from .workflows import AlertProcessingWorkflow
             
             workflow_id = config.workflow_id
+            
+            if self.temporal_client is None:
+                raise RuntimeError("Temporal client not initialized")
             
             # Check if workflow already exists
             try:
@@ -282,7 +269,7 @@ class AlertWatcherApp:
             logger.info("Stopping Temporal worker")
             try:
                 await asyncio.wait_for(self.worker.shutdown(), timeout=5.0)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 logger.warning("Temporal worker shutdown timed out")
 
         # Close Temporal client

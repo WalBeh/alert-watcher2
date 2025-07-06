@@ -1,205 +1,249 @@
 # Alert Watcher 2 - Simplification Summary
 
-## Overview
+## 🎯 Overview
 
-This document summarizes the dramatic simplification of the Alert Watcher 2 system, reducing it from a complex multi-step pipeline to a simple logging system that captures AlertManager webhook data structures.
+This document summarizes the major simplification of the Alert Watcher 2 system to focus exclusively on processing two specific CrateDB alert types with a clean sub-workflow architecture.
 
-## What Was Removed
+## 📋 Key Requirements Implemented
 
-### 1. Complex S3 Upload Logic (~550 lines)
-- **Removed**: `S3UploadActivity` class with comprehensive upload strategies
-- **Removed**: Multi-part uploads, retry logic, caching
-- **Removed**: S3 configuration (bucket, region, credentials)
-- **Removed**: Upload quality scoring and performance metrics
-- **Removed**: Cost estimation and retention policies
+### 1. Alert Type Filtering
+- **ONLY** processes two specific events:
+  - `CrateDBContainerRestart`
+  - `CrateDBCloudNotResponsive`
+- All other alert types are rejected with clear messaging
+- Webhook endpoint validates alert types before processing
 
-### 2. Complex JFR Collection Logic (~550 lines)
-- **Removed**: `JFRCollectionActivity` class with enhanced collection
-- **Removed**: `hemako jfr collect` command generation
-- **Removed**: Collection strategies (deep_profiling, startup_analysis, standard)
-- **Removed**: JFR validation, duplicate detection, and caching
-- **Removed**: Collection quality scoring and analysis recommendations
+### 2. Hemako Command Placeholder
+- Created `execute_hemako_command` activity as placeholder
+- Different CLI parameters based on alert type:
+  - `CrateDBContainerRestart` → `--jfr` parameter
+  - `CrateDBCloudNotResponsive` → `--crash-heapdump-upload` parameter
+- Command format: `hemako jfr {param} --namespace {namespace} --pod {pod}`
 
-### 3. Complex Validation and Error Handling
-- **Removed**: Alert type validation and filtering
-- **Removed**: Required field validation (namespace, pod, kube_context)
-- **Removed**: Supported alert type enumeration
-- **Removed**: Complex retry policies and error recovery
-- **Removed**: Activity monitoring and performance tracking
+### 3. Sub-Workflow Architecture
+- Each incoming alert spawns a dedicated sub-workflow
+- Sub-workflow naming pattern: `{AlertName}-{Namespace}-{UUID}`
+- Examples:
+  - `CrateDBContainerRestart-cratedb-prod-abc123`
+  - `CrateDBCloudNotResponsive-cratedb-staging-def456`
 
-### 4. Workflow Orchestration Complexity
-- **Removed**: Multi-step workflow (log → JFR → S3)
-- **Removed**: Workflow manager and lifecycle management
-- **Removed**: Complex continue-as-new logic
-- **Removed**: Activity result chaining and error propagation
+### 4. Code Simplification
+- Removed all unnecessary activities and complex logic
+- Streamlined workflow processing
+- Eliminated unused test files and deprecated functionality
 
-### 5. Test Infrastructure
-- **Removed**: Entire `tests/` directory (26 activity tests, 18 workflow tests, webhook tests)
-- **Removed**: Complex mocking and test fixtures
-- **Removed**: Integration test setup
+## 🗑️ What Was Removed
 
-### 6. Monitoring and Metrics
-- **Removed**: `ActivityMonitor` class with performance tracking
-- **Removed**: Health status reporting and statistics
-- **Removed**: Performance recommendations and trend analysis
-- **Removed**: Activity execution recording and reporting
+### Activities
+- `log_alert` (generic logging)
+- `log_cratedb_alert` (specific alert logging)
+- `log_prometheus_alert` (Prometheus alerts)
+- `log_node_alert` (Node alerts)
+- `log_pod_alert` (Pod alerts)
+- `log_service_alert` (Service alerts)
+- All dynamic activity factories
 
-## What Remains
+### Workflows
+- Complex alert processing logic
+- Multiple activity execution paths
+- Generic alert handling fallbacks
+- Activity name resolution logic
 
-### 1. Core Pipeline Components
-- **FastAPI webhook server** (`webhook.py`) - Simplified to remove validation
-- **Temporal workflow** (`workflows.py`) - Simplified to single activity call
-- **Log activity** (`activities.py`) - Single function that logs JSON structure
-- **Models** (`models.py`) - Basic AlertManager webhook models
-- **Configuration** (`config.py`) - Minimal configuration management
+### Test Files
+- `test_webhook_alerts.py`
+- `test_activity_fallback.py`
+- `test_cratedb_container_restart.py`
+- `test_naming_changes.py`
+- `test_shutdown.py`
+- `test_shutdown_simple.py`
+- `test_simplified.py`
+- `test_temporal_events.py`
+- `test_temporal_minimal.py`
 
-### 2. Essential Endpoints
-- `GET /health` - Basic health check
-- `GET /ready` - Temporal connection check
-- `POST /webhook/alertmanager` - Main webhook endpoint
-- `POST /test/alert` - Simple test endpoint
+### Features
+- Complex S3 upload logic
+- JFR collection with multiple commands
+- Performance monitoring and metrics
+- Multi-alert type validation
+- Complex retry and error handling
 
-### 3. Basic Functionality
-- Receive AlertManager webhooks
-- Parse webhook payloads
-- Send signals to Temporal workflow
-- Log complete alert data structure as JSON
+## 🏗️ New Architecture
 
-## File Changes Summary
+### Main Components
 
-| File | Before | After | Change |
-|------|--------|-------|---------|
-| `activities.py` | 1,682 lines | 95 lines | -94% |
-| `models.py` | 107 lines | 64 lines | -40% |
-| `workflows.py` | 295 lines | 210 lines | -29% |
-| `webhook.py` | 404 lines | 372 lines | -8% |
-| `config.py` | 65 lines | 45 lines | -31% |
-| `main.py` | 346 lines | 273 lines | -21% |
-| `tests/` | 3 files | 0 files | -100% |
-| `workflow_manager.py` | 1 file | 0 files | -100% |
+1. **AlertProcessingWorkflow** (Main)
+   - Continuously runs and receives alert signals
+   - Filters for supported alert types only
+   - Spawns sub-workflows for each valid alert
 
-## Architecture Comparison
+2. **CrateDBAlertSubWorkflow** (Sub-Workflow)
+   - Processes individual alerts
+   - Named with alert type and namespace
+   - Executes hemako command activity
 
-### Before (Complex)
+3. **execute_hemako_command** (Activity)
+   - Placeholder for hemako command execution
+   - Determines parameters based on alert type
+   - Simulates command execution (2-second delay)
+
+### Data Flow
+
 ```
-AlertManager → Webhook → Signal → Workflow → [Log Activity → JFR Activity → S3 Activity]
-                                            ↓
-                                  [Validation, Retry, Monitoring, Caching]
-```
-
-### After (Simple)
-```
-AlertManager → Webhook → Signal → Workflow → Log Activity
-                                            ↓
-                                    [JSON Structure Output]
+AlertManager → Webhook → Filter → Main Workflow → Sub-Workflow → Hemako Activity
 ```
 
-## Key Benefits of Simplification
+### Alert Processing Logic
 
-### 1. **Understandability**
-- Clear, linear flow from webhook to log output
-- Minimal code paths and decision points
-- Easy to trace and debug
+```python
+# Webhook filtering
+if alert_name not in SUPPORTED_ALERTS:
+    reject_alert()
+    return
 
-### 2. **Maintainability**
-- ~1,400 fewer lines of code
-- No complex state management
-- Reduced dependency surface area
+# Main workflow
+sub_workflow_id = f"{alert_name}-{namespace}-{uuid}"
+start_child_workflow(CrateDBAlertSubWorkflow, sub_workflow_id)
 
-### 3. **Focus on Core Goal**
-- Primary objective: Understand AlertManager label structure
-- No distracting complexity or premature optimization
-- Clear path to incremental enhancement
+# Sub-workflow
+if alert_name == "CrateDBContainerRestart":
+    param = "--jfr"
+elif alert_name == "CrateDBCloudNotResponsive":
+    param = "--crash-heapdump-upload"
 
-### 4. **Faster Development**
-- Quick to modify and test
-- No complex mocking or test infrastructure
-- Direct feedback through log output
+execute_activity("execute_hemako_command", {
+    "alert_name": alert_name,
+    "namespace": namespace,
+    "pod": pod,
+    "command_param": param
+})
+```
 
-## What the System Does Now
+## 📊 File Changes Summary
 
-1. **Receives** AlertManager webhooks via HTTP POST
-2. **Parses** the webhook payload into structured data
-3. **Forwards** alerts as signals to Temporal workflow
-4. **Logs** the complete alert data structure including:
-   - Alert metadata (status, timestamps, fingerprint)
-   - All labels (alertname, namespace, pod, kube_context, severity, etc.)
-   - All annotations (summary, description, runbook_url, etc.)
-   - Processing metadata (alert_id, processing_id, timestamps)
+### Modified Files
+- `src/alert_watcher/activities.py` - Simplified to single hemako activity
+- `src/alert_watcher/workflows.py` - Added sub-workflow architecture
+- `src/alert_watcher/main.py` - Updated worker registration
+- `src/alert_watcher/webhook.py` - Added alert type filtering
+- `README.md` - Completely rewritten for simplified system
 
-## Sample Output
+### New Files
+- `test_simplified_cratedb.py` - Comprehensive test suite
+- `SIMPLIFICATION_SUMMARY.md` - This document
 
-When an alert is received, the system outputs:
+### Deleted Files
+- 9 old test files (listed above)
+- Various documentation files for removed features
 
-```json
-{
-  "timestamp": "2025-01-01T12:00:00Z",
-  "event": "alert_received",
-  "alert_id": "CrateDBCloudNotResponsive-cratedb-cloud-crate-data-0-uuid",
-  "processing_id": "correlation-uuid",
-  "alert_data": {
-    "status": "firing",
-    "labels": {
-      "alertname": "CrateDBCloudNotResponsive",
-      "namespace": "cratedb-cloud",
-      "pod": "crate-data-0",
-      "kube_context": "prod-cluster-1",
-      "sts": "crate-data",
-      "severity": "critical",
-      "instance": "crate-data-0.crate-data.cratedb-cloud.svc.cluster.local:4200",
-      "job": "cratedb-monitoring"
-    },
-    "annotations": {
-      "summary": "CrateDB Cloud instance is not responsive",
-      "description": "Instance is not responding to health checks",
-      "runbook_url": "https://docs.cratedb.com/troubleshooting/not-responsive"
-    },
-    "startsAt": "2025-01-01T12:00:00Z",
-    "endsAt": null,
-    "generatorURL": "http://prometheus:9090/...",
-    "fingerprint": "abc123def456"
-  }
+## 🧪 Testing Strategy
+
+### Test Coverage
+- Health and readiness endpoints
+- Supported alert processing
+- Unsupported alert rejection
+- Batch alert processing
+- Sub-workflow spawning
+
+### Test Script Features
+- Realistic AlertManager webhook payloads
+- Correlation ID tracking
+- Success/failure reporting
+- Clear test output with emojis
+
+## 🔧 Configuration
+
+### Environment Variables
+```bash
+# Only essential configuration remains
+ALERT_WATCHER_HOST=0.0.0.0
+ALERT_WATCHER_PORT=8000
+ALERT_WATCHER_LOG_LEVEL=INFO
+TEMPORAL_HOST=localhost
+TEMPORAL_PORT=7233
+WORKFLOW_ID=alert-watcher2-main
+```
+
+### Supported Alerts
+```python
+SUPPORTED_ALERTS = {
+    "CrateDBContainerRestart",
+    "CrateDBCloudNotResponsive"
 }
 ```
 
-## Next Steps for Enhancement
+## 🚀 Benefits of Simplification
 
-Once the AlertManager label structure is understood, you can incrementally add back:
+### 1. Clarity
+- Clear separation of concerns
+- One alert type = one sub-workflow
+- Easy to understand and debug
 
-1. **Alert Type Filtering**: Add back specific alert type validation
-2. **JFR Collection**: Implement `hemako jfr collect` based on understood labels
-3. **Error Handling**: Add proper retry logic and error recovery
-4. **S3 Upload**: Add file upload capabilities for JFR data
-5. **Monitoring**: Add back performance metrics and health monitoring
-6. **Testing**: Implement focused test suite for core functionality
+### 2. Maintainability
+- Minimal code surface area
+- Single responsibility per component
+- Easy to extend for new alert types
 
-## Success Metrics
+### 3. Reliability
+- Isolated alert processing
+- Independent sub-workflow execution
+- Clear error boundaries
 
-The simplification achieves:
-- ✅ **Primary Goal**: Clear visibility into AlertManager webhook structure
-- ✅ **Reduced Complexity**: 94% reduction in core activity code
-- ✅ **Maintainability**: Single responsibility per component
-- ✅ **Debuggability**: Clear log output for understanding data flow
-- ✅ **Extensibility**: Clean foundation for incremental feature addition
+### 4. Observability
+- Named sub-workflows for easy identification
+- Correlation IDs throughout the pipeline
+- Structured logging with context
 
-This simplified system provides the essential foundation for understanding AlertManager webhooks while maintaining the flexibility to add back complexity as needed.
+## 🔮 Future Development
 
-## Usage with uv
+### Immediate Next Steps
+1. Implement actual hemako command execution
+2. Add error handling and retry logic
+3. Test with real AlertManager integration
 
-This project uses [uv](https://docs.astral.sh/uv/) for dependency management:
+### Planned Enhancements
+1. Add more CrateDB alert types
+2. Implement command result handling
+3. Add monitoring and metrics
+4. Create deployment configuration
 
+## 📝 Usage Instructions
+
+### Starting the System
 ```bash
-# 1. Install dependencies
-uv sync
-
-# 2. Start Temporal server
+# Terminal 1: Start Temporal
 temporal server start-dev
 
-# 3. Run the simplified system
-uv run python -m src.alert_watcher.main
+# Terminal 2: Start Alert Watcher 2
+python -m src.alert_watcher.main
 
-# 4. Send test alerts
-uv run python test_simplified.py
-# or
-uv run python run_example.py
+# Terminal 3: Run tests
+python test_simplified_cratedb.py
 ```
+
+### Monitoring
+- Temporal UI: http://localhost:8233
+- Health: http://localhost:8000/health
+- API docs: http://localhost:8000/docs
+
+## ✅ Verification Checklist
+
+- [x] Only processes CrateDBContainerRestart and CrateDBCloudNotResponsive
+- [x] Rejects all other alert types
+- [x] Creates sub-workflows with alert name + namespace
+- [x] Hemako command placeholder with correct parameters
+- [x] Removed all unnecessary code
+- [x] Comprehensive test suite
+- [x] Updated documentation
+- [x] Clean project structure
+
+## 🎉 Conclusion
+
+The Alert Watcher 2 system has been successfully simplified to focus exclusively on the two required CrateDB alert types. The new architecture provides:
+
+- **Clear separation** between main workflow and alert processing
+- **Isolated execution** through sub-workflows
+- **Easy identification** through descriptive naming
+- **Extensible design** for future enhancements
+- **Comprehensive testing** with realistic scenarios
+
+The system is now ready for hemako command implementation and production deployment.
