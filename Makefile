@@ -20,6 +20,7 @@ help:
 	@echo ""
 	@echo "Build Commands:"
 	@echo "  build         Build Docker image"
+	@echo "  build-uv      Build Docker image with uv (faster)"
 	@echo "  push          Push Docker image to registry"
 	@echo "  build-push    Build and push Docker image"
 	@echo ""
@@ -46,6 +47,8 @@ help:
 	@echo "  port-forward  Forward port 8000 to local machine"
 	@echo "  health        Check application health"
 	@echo "  test-webhook  Test webhook endpoint"
+	@echo "  verify-secret Verify image pull secret configuration"
+	@echo "  verify-deploy Verify deployment configuration"
 	@echo ""
 	@echo "Variables:"
 	@echo "  IMAGE_NAME=$(IMAGE_NAME)"
@@ -57,6 +60,11 @@ help:
 build:
 	@echo "$(GREEN)[INFO]$(NC) Building Docker image: $(FULL_IMAGE)"
 	docker build -t $(FULL_IMAGE) .
+
+.PHONY: build-uv
+build-uv:
+	@echo "$(GREEN)[INFO]$(NC) Building Docker image with uv: $(FULL_IMAGE)"
+	docker build -f Dockerfile.uv -t $(FULL_IMAGE) .
 
 .PHONY: push
 push:
@@ -120,6 +128,7 @@ deploy: build-push
 	@echo "$(GREEN)[INFO]$(NC) Deploying to Kubernetes namespace: $(NAMESPACE)"
 	cd deploy && sed -i.bak "s|image: cloud.registry.cr8.net/alert-manager2:.*|image: $(FULL_IMAGE)|" deployment.yaml && rm -f deployment.yaml.bak
 	@echo "$(GREEN)[INFO]$(NC) Apply the following manifests manually:"
+	@echo "kubectl apply -f deploy/ipcr8.yaml -n $(NAMESPACE)"
 	@echo "kubectl apply -f deploy/rbac.yaml -n $(NAMESPACE)"
 	@echo "kubectl apply -f deploy/deployment.yaml -n $(NAMESPACE)"
 	@echo "kubectl apply -f deploy/service.yaml -n $(NAMESPACE)"
@@ -157,6 +166,7 @@ undeploy:
 	@echo "kubectl delete -f deploy/service.yaml -n $(NAMESPACE)"
 	@echo "kubectl delete -f deploy/deployment.yaml -n $(NAMESPACE)"
 	@echo "kubectl delete -f deploy/rbac.yaml -n $(NAMESPACE)"
+	@echo "kubectl delete -f deploy/ipcr8.yaml -n $(NAMESPACE)"
 
 # Utility commands
 .PHONY: shell
@@ -182,6 +192,19 @@ test-webhook:
 	@echo "2. curl -X POST http://localhost:8000/webhook/alertmanager \\"
 	@echo "     -H 'Content-Type: application/json' \\"
 	@echo "     -d '{\"alerts\": [{\"labels\": {\"alertname\": \"CrateDBContainerRestart\"}}]}'"
+
+# Verification commands
+.PHONY: verify-secret
+verify-secret:
+	@echo "$(GREEN)[INFO]$(NC) Verifying image pull secret configuration"
+	@./deploy/verify-secret.sh -n $(NAMESPACE)
+
+.PHONY: verify-deploy
+verify-deploy:
+	@echo "$(GREEN)[INFO]$(NC) Verifying deployment configuration"
+	@kubectl apply -f deploy/deployment.yaml --dry-run=client -n $(NAMESPACE)
+	@kubectl apply -f deploy/ipcr8.yaml --dry-run=client -n $(NAMESPACE)
+	@echo "$(GREEN)[INFO]$(NC) Deployment manifests are valid"
 
 # Development shortcuts
 .PHONY: dev-setup

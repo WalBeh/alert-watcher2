@@ -62,8 +62,6 @@ LICENSE*
 
 # Development files
 .python-version
-pyproject.toml
-uv.lock
 setup.py
 setup.cfg
 tox.ini

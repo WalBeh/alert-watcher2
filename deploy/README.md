@@ -16,10 +16,27 @@ Alert Watcher 2 is a simplified CrateDB alert processing system that:
 - kubectl configured to access your cluster
 - Temporal server running in the cluster
 - Container registry access to `cloud.registry.cr8.net`
+- Image pull secret configured for private registry access
 
 ## Quick Start
 
-### 1. Build and Push Docker Image
+### 1. Configure Image Pull Secret
+
+First, create the image pull secret for accessing the private registry:
+
+```bash
+# Apply the pre-configured secret
+kubectl apply -f deploy/ipcr8.yaml
+
+# Or create it manually
+kubectl create secret docker-registry image-pull-cr8cloud \
+  --docker-server=cloud.registry.cr8.net \
+  --docker-username=<your-username> \
+  --docker-password=<your-password> \
+  --docker-email=<your-email>
+```
+
+### 2. Build and Push Docker Image
 
 ```bash
 # Build the Docker image
@@ -29,16 +46,14 @@ docker build -t cloud.registry.cr8.net/alert-manager2:latest .
 docker push cloud.registry.cr8.net/alert-manager2:latest
 ```
 
-### 2. Deploy to Kubernetes
+### 3. Deploy to Kubernetes
 
 ```bash
-# Apply all manifests
-kubectl apply -f deploy/
+# Using the deployment script (recommended)
+./deploy/deploy.sh
 
-# Build and push Docker image first
-make build-push
-
-# Then apply individual manifests
+# Or apply individual manifests in order
+kubectl apply -f deploy/ipcr8.yaml
 kubectl apply -f deploy/rbac.yaml
 kubectl apply -f deploy/deployment.yaml
 kubectl apply -f deploy/service.yaml
@@ -46,7 +61,7 @@ kubectl apply -f deploy/pdb.yaml
 kubectl apply -f deploy/networkpolicy.yaml
 ```
 
-### 3. Verify Deployment
+### 4. Verify Deployment
 
 ```bash
 # Check deployment status
@@ -55,6 +70,9 @@ kubectl get pods -l app=alert-watcher2
 
 # Check service
 kubectl get svc alert-watcher2
+
+# Verify image pull secret
+./deploy/verify-secret.sh
 ```
 
 ## Configuration
@@ -86,9 +104,10 @@ The application requires a Temporal server to be running in the cluster. Update 
 
 | File | Description |
 |------|-------------|
+| `ipcr8.yaml` | Image pull secret for private registry access |
+| `rbac.yaml` | Service account and RBAC permissions |
 | `deployment.yaml` | Main application deployment with environment variables |
 | `service.yaml` | ClusterIP service for the application |
-| `rbac.yaml` | Service account and RBAC permissions |
 | `pdb.yaml` | Pod disruption budget for high availability |
 | `networkpolicy.yaml` | Network security policies |
 
@@ -135,14 +154,18 @@ make status
 
 ### Using Deploy Scripts
 ```bash
-# Update deployment configuration
-./deploy/simple-deploy.sh
+# Full deployment with secret verification
+./deploy/deploy.sh
 
-# Or use the detailed script
-./deploy/build-and-deploy.sh
+# Deploy to specific namespace
+./deploy/deploy.sh --namespace production
+
+# Verify image pull secret configuration
+./deploy/verify-secret.sh
+
+# Test image pull capability
+./deploy/verify-secret.sh --test
 ```
-
-Note: All scripts show you the commands to run rather than executing them automatically.
 
 ## Monitoring
 
@@ -198,6 +221,10 @@ kubectl exec -it deployment/alert-watcher2 -- curl localhost:8000/health
 # Check Temporal connectivity
 kubectl exec -it deployment/alert-watcher2 -- nslookup temporal-frontend
 
+# Verify image pull secret
+kubectl get secret image-pull-cr8cloud -o yaml
+./deploy/verify-secret.sh --test
+
 # Test webhook endpoint
 kubectl port-forward svc/alert-watcher2 8000:80 &
 curl -X POST http://localhost:8000/webhook/alertmanager \
@@ -225,6 +252,7 @@ kubectl delete -f deploy/pdb.yaml
 kubectl delete -f deploy/service.yaml
 kubectl delete -f deploy/deployment.yaml
 kubectl delete -f deploy/rbac.yaml
+kubectl delete -f deploy/ipcr8.yaml
 ```
 
 Or use the Makefile:

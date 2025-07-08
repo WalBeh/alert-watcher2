@@ -31,7 +31,7 @@ spec:
             - name: LOG_LEVEL
               value: "INFO"
             - name: TEMPORAL_HOST
-              value: "temporal-frontend"
+              value: "temporal-frontend.temporal"
             - name: TEMPORAL_PORT
               value: "7233"
             - name: TEMPORAL_NAMESPACE
@@ -80,6 +80,8 @@ spec:
               drop:
                 - ALL
       serviceAccountName: alert-watcher2
+      imagePullSecrets:
+        - name: image-pull-cr8cloud
       restartPolicy: Always
       securityContext:
         fsGroup: 1000
