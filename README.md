@@ -186,7 +186,11 @@ curl -X POST http://localhost:8000/webhook/alertmanager \
 curl -X POST http://localhost:8000/webhook/alertmanager \
   -H "Content-Type: application/json" \
   -d @test_data/cratedb_cloud_alert.json
+
+# Oneliner for Testing
+curl -X POST http://alert-watcher2:80/webhook/alertmanager -H "Content-Type: application/json" -d '{"version":"4","groupKey":"test","status":"firing","receiver":"test","externalURL":"http://test","alerts":[{"status":"firing","labels":{"alertname":"CrateDBContainerRestart","namespace":"test","pod":"test-pod"},"annotations":{"summary":"Test"},"startsAt":"2024-01-01T12:00:00Z"}]}'
 ```
+
 
 ### Health Checks
 
@@ -346,26 +350,14 @@ For issues or questions:
 3. Examine logs with correlation IDs
 4. Open an issue with reproduction steps
 
-## 🔧 Recent Updates & Fixes
+## 📋 Changes
 
-### Latest Changes (2025-07-06)
-- ✅ **Fixed Temporal workflow logging compatibility** - Resolved `Logger._log()` keyword argument errors
-- ✅ **All tests passing** - Complete test suite verification completed
-- ✅ **Alert filtering verified** - Confirmed rejection of unsupported alert types
-- ✅ **Sub-workflow naming confirmed** - Pattern `{AlertName}-{Namespace}-{UUID}` working correctly
+For detailed information about recent updates, fixes, and feature additions, see [CHANGES.md](CHANGES.md).
 
-### Verified Working Features
-- ✅ Health and readiness endpoints
-- ✅ CrateDBContainerRestart alert processing
-- ✅ CrateDBCloudNotResponsive alert processing  
-- ✅ Unsupported alert rejection with clear messaging
-- ✅ Batch alert processing (mixed supported/unsupported)
-- ✅ Sub-workflow creation and execution
-- ✅ Hemako command placeholder with correct parameters
+## 📝 TODO
 
-## 🚀 Ready for Production
+For planned features and development tasks, see [TODO.md](TODO.md).
 
-The system is now **production-ready** with all core functionality working correctly. The next step is implementing the actual `hemako` command execution in the `execute_hemako_command` activity.
 
 ---
 
