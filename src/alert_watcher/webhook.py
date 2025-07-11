@@ -196,15 +196,19 @@ async def receive_alertmanager_webhook(
             # Create unique alert ID
             alert_id = f"{alert_name}-{alert.labels.namespace}-{alert.labels.pod}-{correlation_id}"
 
-            # Create signal payload
-            signal_payload = AlertProcessingSignal(
-                alert_id=alert_id,
-                alert_data=alert,
-                processing_id=correlation_id
-            )
+            # Create command data for the agent
+            command_data = {
+                'alert_id': alert_id,
+                'alert_name': alert_name,
+                'alert_labels': alert.labels.dict(),
+                'alert_annotations': alert.annotations.dict(),
+                'cluster_context': determine_cluster_context(alert.labels.namespace),
+                'command_type': 'kubectl_test',
+                'processing_id': correlation_id
+            }
             
-            # Forward to Temporal workflow
-            await forward_alert_signal(signal_payload, correlation_id)
+            # Forward to agent coordinator
+            await forward_to_agent_coordinator(command_data, correlation_id)
 
             processed_alerts.append({
                 "alert_id": alert_id,
@@ -272,57 +276,81 @@ async def receive_alertmanager_webhook(
     return response_data
 
 
-async def forward_alert_signal(signal_payload: AlertProcessingSignal, correlation_id: str):
+def determine_cluster_context(namespace: str) -> str:
     """
-    Forward a CrateDB alert signal to the Temporal workflow.
+    Determine cluster context based on namespace.
     
-    This function sends a CrateDB alert signal to the running Temporal workflow
-    for processing. The workflow should already be running.
+    Args:
+        namespace: Kubernetes namespace
+        
+    Returns:
+        Cluster context string
+    """
+    # Map namespaces to clusters - customize this based on your setup
+    namespace_to_cluster = {
+        "cratedb-prod": "aks1-eastus-dev",
+        "cratedb-staging": "eks1-us-east-1-dev", 
+        "cratedb-dev": "clusterxy",
+        "cratedb-test": "clusterxy"
+    }
+    
+    return namespace_to_cluster.get(namespace, "aks1-eastus-dev")  # Default cluster
+
+
+async def forward_to_agent_coordinator(command_data: dict, correlation_id: str):
+    """
+    Forward a CrateDB alert command to the agent coordinator.
+    
+    This function sends a command to the agent coordinator workflow
+    for processing across the appropriate cluster.
     """
     if not temporal_client:
         logger.error("Temporal client not initialized")
         raise RuntimeError("Temporal client not connected")
 
-    workflow_id = config.workflow_id
+    workflow_id = "alert-watcher-agent-coordinator"
 
     logger.info(
-        "Sending CrateDB alert signal to workflow",
+        "Sending command to agent coordinator",
         workflow_id=workflow_id,
         correlation_id=correlation_id,
-        alert_id=signal_payload.alert_id,
-        alert_name=signal_payload.alert_data.labels.alertname
+        alert_id=command_data['alert_id'],
+        alert_name=command_data['alert_name'],
+        cluster_context=command_data['cluster_context']
     )
 
     try:
         # Get workflow handle and send signal
         workflow_handle = temporal_client.get_workflow_handle(workflow_id)
 
-        # Send signal to workflow
+        # Send signal to agent coordinator
         await workflow_handle.signal(
-            "alert_received",
-            signal_payload.dict()
+            "execute_command",
+            command_data
         )
 
         logger.info(
-            "CrateDB alert signal sent to workflow successfully",
+            "Command sent to agent coordinator successfully",
             correlation_id=correlation_id,
             workflow_id=workflow_id,
-            alert_id=signal_payload.alert_id,
-            alert_name=signal_payload.alert_data.labels.alertname,
-            signal_name="alert_received"
+            alert_id=command_data['alert_id'],
+            alert_name=command_data['alert_name'],
+            cluster_context=command_data['cluster_context'],
+            signal_name="execute_command"
         )
 
     except Exception as e:
         logger.error(
-            "Failed to send CrateDB alert signal to workflow",
+            "Failed to send command to agent coordinator",
             correlation_id=correlation_id,
             workflow_id=workflow_id,
-            alert_name=signal_payload.alert_data.labels.alertname,
+            alert_name=command_data['alert_name'],
+            cluster_context=command_data['cluster_context'],
             error=str(e),
             error_type=type(e).__name__,
             exc_info=True
         )
-        raise RuntimeError(f"Failed to forward CrateDB alert signal: {str(e)}")
+        raise RuntimeError(f"Failed to forward command to agent: {str(e)}")
 
 
 @app.exception_handler(Exception)
