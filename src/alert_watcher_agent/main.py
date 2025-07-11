@@ -11,6 +11,7 @@ import signal
 import sys
 from datetime import timedelta
 from typing import Dict, Optional, Any
+import time
 
 import structlog
 from temporalio.client import Client
@@ -33,6 +34,7 @@ class AlertWatcherAgent:
     - Health monitoring and status reporting
     - Proper resource cleanup
     - Configuration management
+    - Connection resilience and workflow health monitoring
     """
     
     def __init__(self, config: Optional[AgentConfig] = None):
@@ -42,6 +44,15 @@ class AlertWatcherAgent:
         self.cluster_workers: Dict[str, Worker] = {}
         self.is_running = False
         self.shutdown_event = asyncio.Event()
+        
+        # Connection resilience
+        self.connection_retry_count = 0
+        self.max_connection_retries = 10
+        self.connection_retry_delay = 5  # seconds
+        
+        # Workflow health monitoring
+        self.workflow_health_check_interval = 30  # seconds
+        self.workflow_health_task: Optional[asyncio.Task] = None
         
         # Setup logging
         self._setup_logging()
@@ -120,11 +131,15 @@ class AlertWatcherAgent:
             
             self.is_running = True
             
+            # Start workflow health monitoring
+            self.workflow_health_task = asyncio.create_task(self._monitor_workflow_health())
+            
             self.logger.info(
                 "Alert Watcher Agent started successfully",
                 coordinator_worker=bool(self.coordinator_worker),
                 cluster_workers=len(self.cluster_workers),
-                supported_clusters=self.config.supported_clusters
+                supported_clusters=self.config.supported_clusters,
+                workflow_health_monitoring=True
             )
             
             # Wait for shutdown signal
@@ -143,39 +158,58 @@ class AlertWatcherAgent:
             raise
     
     async def _initialize_temporal_client(self):
-        """Initialize Temporal client with optimal configuration."""
-        self.logger.info(
-            "Initializing Temporal client",
-            temporal_address=self.config.get_temporal_address(),
-            namespace=self.config.temporal_namespace,
-            tls_enabled=self.config.temporal_tls_enabled
-        )
-        
-        try:
-            # Setup TLS if enabled
-            tls_config = TLSConfig() if self.config.temporal_tls_enabled else False
-            
-            # Create client
-            self.temporal_client = await Client.connect(
-                target_host=self.config.get_temporal_address(),
-                namespace=self.config.temporal_namespace,
-                tls=tls_config,
-                identity=self.config.temporal_identity
-            )
-            
-            self.logger.info(
-                "Temporal client initialized successfully",
-                identity=self.config.temporal_identity,
-                namespace=self.config.temporal_namespace
-            )
-            
-        except Exception as e:
-            self.logger.error(
-                "Failed to initialize Temporal client",
-                error=str(e),
-                temporal_address=self.config.get_temporal_address()
-            )
-            raise
+        """Initialize Temporal client with connection resilience."""
+        while self.connection_retry_count < self.max_connection_retries:
+            try:
+                self.logger.info(
+                    "Initializing Temporal client",
+                    temporal_address=self.config.get_temporal_address(),
+                    namespace=self.config.temporal_namespace,
+                    tls_enabled=self.config.temporal_tls_enabled,
+                    attempt=self.connection_retry_count + 1,
+                    max_attempts=self.max_connection_retries
+                )
+                
+                # Setup TLS if enabled
+                tls_config = TLSConfig() if self.config.temporal_tls_enabled else False
+                
+                # Create client
+                self.temporal_client = await Client.connect(
+                    target_host=self.config.get_temporal_address(),
+                    namespace=self.config.temporal_namespace,
+                    tls=tls_config,
+                    identity=self.config.temporal_identity
+                )
+                
+                self.logger.info(
+                    "Temporal client initialized successfully",
+                    identity=self.config.temporal_identity,
+                    namespace=self.config.temporal_namespace
+                )
+                
+                # Reset retry count on successful connection
+                self.connection_retry_count = 0
+                return
+                
+            except Exception as e:
+                self.connection_retry_count += 1
+                self.logger.warning(
+                    "Failed to initialize Temporal client",
+                    error=str(e),
+                    temporal_address=self.config.get_temporal_address(),
+                    attempt=self.connection_retry_count,
+                    max_attempts=self.max_connection_retries
+                )
+                
+                if self.connection_retry_count >= self.max_connection_retries:
+                    self.logger.error(
+                        "Max connection retries exceeded",
+                        max_retries=self.max_connection_retries
+                    )
+                    raise
+                
+                # Wait before retry
+                await asyncio.sleep(self.connection_retry_delay)
     
     async def _test_cluster_connectivity(self):
         """Test connectivity to all configured clusters."""
@@ -329,7 +363,7 @@ class AlertWatcherAgent:
             # Continue with other clusters even if one fails
     
     async def _start_coordinator_workflow(self):
-        """Start the coordinator workflow."""
+        """Start the coordinator workflow with retry logic."""
         if self.temporal_client is None:
             raise RuntimeError("Temporal client not initialized")
             
@@ -369,6 +403,68 @@ class AlertWatcherAgent:
             )
             raise
     
+    async def _monitor_workflow_health(self):
+        """Monitor workflow health and restart if needed."""
+        while self.is_running:
+            try:
+                await asyncio.sleep(self.workflow_health_check_interval)
+                
+                if not self.is_running:
+                    break
+                
+                # Check coordinator workflow health
+                await self._check_coordinator_workflow_health()
+                
+            except Exception as e:
+                self.logger.error(
+                    "Error in workflow health monitoring",
+                    error=str(e)
+                )
+                await asyncio.sleep(self.workflow_health_check_interval)
+    
+    async def _check_coordinator_workflow_health(self):
+        """Check if coordinator workflow is running and restart if needed."""
+        if self.temporal_client is None:
+            return
+            
+        workflow_id = "alert-watcher-agent-coordinator"
+        
+        try:
+            # Get workflow handle
+            handle = self.temporal_client.get_workflow_handle(workflow_id)
+            
+            # Check if workflow is running
+            try:
+                result = await handle.describe()
+                if result.status.name in ["COMPLETED", "FAILED", "CANCELLED", "TERMINATED"]:
+                    self.logger.warning(
+                        "Coordinator workflow not running, restarting",
+                        workflow_id=workflow_id,
+                        status=result.status.name
+                    )
+                    await self._start_coordinator_workflow()
+                else:
+                    self.logger.debug(
+                        "Coordinator workflow health check passed",
+                        workflow_id=workflow_id,
+                        status=result.status.name
+                    )
+            except Exception as e:
+                # If describe fails, workflow might not exist
+                self.logger.warning(
+                    "Coordinator workflow not found, restarting",
+                    workflow_id=workflow_id,
+                    error=str(e)
+                )
+                await self._start_coordinator_workflow()
+                
+        except Exception as e:
+            self.logger.error(
+                "Error checking coordinator workflow health",
+                workflow_id=workflow_id,
+                error=str(e)
+            )
+    
     async def shutdown(self, reason: str = "manual"):
         """Gracefully shutdown the agent."""
         if not self.is_running:
@@ -382,6 +478,15 @@ class AlertWatcherAgent:
         self.is_running = False
         
         try:
+            # Stop workflow health monitoring
+            if self.workflow_health_task:
+                self.workflow_health_task.cancel()
+                try:
+                    await self.workflow_health_task
+                except asyncio.CancelledError:
+                    pass
+                self.logger.info("Stopped workflow health monitoring")
+            
             # Terminate all workflows to ensure clean shutdown
             if self.temporal_client:
                 # Terminate coordinator workflow
