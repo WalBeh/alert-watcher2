@@ -32,6 +32,25 @@ class AgentConfig:
         "clusterxy"
     ])
     
+    # Region to Cluster Mapping
+    region_to_cluster: Dict[str, str] = field(default_factory=lambda: {
+        "us-east-1": "eks1-us-east-1-dev",
+        "us-west-2": "eks1-us-west-2-dev",
+        "eastus": "aks1-eastus-dev",
+        "westus": "aks1-westus-dev",
+        "eu-west-1": "eks1-eu-west-1-dev",
+        "westeurope": "aks1-westeurope-dev",
+        "clusterxy": "clusterxy"
+    })
+    
+    # Namespace to Cluster Mapping (fallback when region not provided)
+    namespace_to_cluster: Dict[str, str] = field(default_factory=lambda: {
+        "cratedb-prod": "aks1-eastus-dev",
+        "cratedb-staging": "eks1-us-east-1-dev", 
+        "cratedb-dev": "clusterxy",
+        "cratedb-test": "clusterxy"
+    })
+    
     # Worker Configuration (optimal for Temporal performance)
     max_concurrent_activities: int = field(default_factory=lambda: int(os.getenv("MAX_CONCURRENT_ACTIVITIES", "1")))
     max_concurrent_workflow_tasks: int = field(default_factory=lambda: int(os.getenv("MAX_CONCURRENT_WORKFLOWS", "10")))
@@ -127,6 +146,39 @@ class AgentConfig:
         """Get the complete Temporal server address."""
         return f"{self.temporal_host}:{self.temporal_port}"
     
+    def get_cluster_for_region(self, region: str) -> Optional[str]:
+        """Get cluster context for a given region."""
+        return self.region_to_cluster.get(region)
+    
+    def get_cluster_for_namespace(self, namespace: str) -> Optional[str]:
+        """Get cluster context for a given namespace."""
+        return self.namespace_to_cluster.get(namespace)
+    
+    def determine_cluster_context(self, namespace: str, region: str = "") -> str:
+        """
+        Determine cluster context based on region and namespace.
+        
+        Args:
+            namespace: Kubernetes namespace
+            region: AWS/Azure region or cluster identifier
+            
+        Returns:
+            Cluster context string
+        """
+        # If region is provided, use it first
+        if region:
+            cluster = self.get_cluster_for_region(region)
+            if cluster:
+                return cluster
+        
+        # Fallback to namespace-based mapping
+        cluster = self.get_cluster_for_namespace(namespace)
+        if cluster:
+            return cluster
+        
+        # Default fallback
+        return "aks1-eastus-dev"
+    
     def to_dict(self) -> Dict:
         """Convert configuration to dictionary for logging."""
         return {
@@ -135,6 +187,8 @@ class AgentConfig:
             "temporal_namespace": self.temporal_namespace,
             "temporal_tls_enabled": self.temporal_tls_enabled,
             "supported_clusters": self.supported_clusters,
+            "region_to_cluster": self.region_to_cluster,
+            "namespace_to_cluster": self.namespace_to_cluster,
             "task_queues": self.get_task_queues(),
             "max_concurrent_activities": self.max_concurrent_activities,
             "activity_timeouts": {

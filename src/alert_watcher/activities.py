@@ -7,11 +7,12 @@ hemako commands with different parameters based on the alert type.
 
 import asyncio
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Dict, Any
 
 import structlog
-from temporalio import activity
+from temporalio import activity, workflow
+from temporalio.common import RetryPolicy
 
 from .models import ActivityResult
 
@@ -25,15 +26,13 @@ async def execute_hemako_command(alert_data: Dict[str, Any]) -> Dict[str, Any]:
     """
     Execute hemako command based on alert type.
     
-    This is a placeholder activity that will eventually execute:
-    - "hemako jfr ..." with "--jfr" for CrateDBContainerRestart
-    - "hemako jfr ..." with "--crash-heapdump-upload" for CrateDBCloudNotResponsive
+    For CrateDBContainerRestart alerts, this triggers the crash dump upload workflow.
+    For CrateDBCloudNotResponsive alerts, this will handle JFR collection (future).
     
     Args:
         alert_data: Dictionary containing alert information including:
                    - alert_name: The alert name (CrateDBContainerRestart or CrateDBCloudNotResponsive)
-                   - namespace: The Kubernetes namespace
-                   - pod: The pod name
+                   - labels: Alert labels containing namespace, pod, etc.
                    - other alert metadata
         
     Returns:
@@ -41,50 +40,74 @@ async def execute_hemako_command(alert_data: Dict[str, Any]) -> Dict[str, Any]:
     """
     try:
         alert_name = alert_data.get("alert_name")
-        namespace = alert_data.get("namespace")
-        pod = alert_data.get("pod")
+        labels = alert_data.get("labels", {})
+        namespace = labels.get("namespace")
+        pod = labels.get("pod")
         
         logger.info(
-            "Executing hemako command (placeholder)",
+            "Executing hemako command",
             alert_name=alert_name,
             namespace=namespace,
             pod=pod
         )
         
-        # Determine the hemako command parameter based on alert type
         if alert_name == "CrateDBContainerRestart":
-            command_param = "--jfr"
+            # Start crash dump upload workflow
+            from crash_dump_uploader.workflows import CrashDumpUploadWorkflow
+            
+            crash_dump_result = await workflow.execute_child_workflow(
+                CrashDumpUploadWorkflow.run,
+                alert_data,
+                id=f"crash-dump-upload-{alert_data.get('alert_id')}-{workflow.uuid4()}",
+                retry_policy=RetryPolicy(
+                    initial_interval=timedelta(seconds=30),
+                    maximum_interval=timedelta(minutes=5),
+                    backoff_coefficient=2.0,
+                    maximum_attempts=2
+                )
+            )
+            
+            return ActivityResult.success_result(
+                message=f"Crash dump upload workflow completed: {crash_dump_result.message}",
+                data={
+                    "alert_name": alert_name,
+                    "namespace": namespace,
+                    "pod": pod,
+                    "workflow_result": {
+                        "success": crash_dump_result.success,
+                        "processed_pods": crash_dump_result.processed_pods,
+                        "uploaded_files_count": len(crash_dump_result.uploaded_files),
+                        "total_size_bytes": crash_dump_result.total_size_bytes,
+                        "upload_count": crash_dump_result.upload_count,
+                        "deletion_count": crash_dump_result.deletion_count,
+                        "duration_seconds": crash_dump_result.total_duration.total_seconds()
+                    },
+                    "executed_at": datetime.fromtimestamp(time.time()).isoformat() + "Z"
+                }
+            ).dict()
+            
         elif alert_name == "CrateDBCloudNotResponsive":
-            command_param = "--crash-heapdump-upload"
+            # TODO: Implement JFR upload workflow
+            logger.info(
+                "CrateDBCloudNotResponsive alert - JFR upload not yet implemented",
+                alert_name=alert_name,
+                namespace=namespace,
+                pod=pod
+            )
+            
+            return ActivityResult.success_result(
+                message="CrateDBCloudNotResponsive alert received - JFR upload not yet implemented",
+                data={
+                    "alert_name": alert_name,
+                    "namespace": namespace,
+                    "pod": pod,
+                    "status": "jfr_upload_pending_implementation",
+                    "executed_at": datetime.fromtimestamp(time.time()).isoformat() + "Z"
+                }
+            ).dict()
+            
         else:
             raise ValueError(f"Unsupported alert type: {alert_name}")
-        
-        # Placeholder for actual hemako command execution
-        # TODO: Replace with actual command execution
-        placeholder_command = f"hemako jfr {command_param} --namespace {namespace} --pod {pod}"
-        
-        logger.info(
-            "Hemako command prepared (placeholder)",
-            command=placeholder_command,
-            alert_name=alert_name,
-            namespace=namespace,
-            pod=pod
-        )
-        
-        # Simulate command execution time
-        await asyncio.sleep(2)
-        
-        # Return success result
-        return ActivityResult.success_result(
-            message=f"Hemako command executed successfully for {alert_name}",
-            data={
-                "alert_name": alert_name,
-                "namespace": namespace,
-                "pod": pod,
-                "command": placeholder_command,
-                "executed_at": datetime.fromtimestamp(time.time()).isoformat() + "Z"
-            }
-        ).dict()
         
     except Exception as e:
         error_msg = f"Failed to execute hemako command: {str(e)}"
