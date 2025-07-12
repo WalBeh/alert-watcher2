@@ -43,4 +43,31 @@ E0712 14:02:43.947035   39555 memcache.go:265] "Unhandled Error" err="couldn't g
 ```
 
 - [ ] web-hook server: should be able to re-connect to temporarl
-- [ ] workflow names: should be shorter: either cluster name, or only first token in the UUID of the namespace, sts: `kubectl-exec-CrateDBContainerRestart-85c8074c-9bf8-4f0a-867c-faf252c76bf0-crate-data-hot-d84c10e6-d8fb-4d10-bf60-f9f2ea919a73-1-1b1c0f8d-hemako_crash_heapdump-1752324341.407892`
+- [x] workflow names: should be shorter: either cluster name, or only first token in the UUID of the namespace, sts: `kubectl-exec-CrateDBContainerRestart-85c8074c-9bf8-4f0a-867c-faf252c76bf0-crate-data-hot-d84c10e6-d8fb-4d10-bf60-f9f2ea919a73-1-1b1c0f8d-hemako_crash_heapdump-1752324341.407892`
+
+
+- [x] correctly handly 0 uploaded files
+```
+  File "/Users/walter/tmp/alert-watcher2/.venv/lib/python3.12/site-packages/temporalio/worker/_workflow_instance.py", line 407, in activate
+    self._run_once(check_conditions=index == 1 or index == 2)
+
+  File "/Users/walter/tmp/alert-watcher2/.venv/lib/python3.12/site-packages/temporalio/worker/_workflow_instance.py", line 1988, in _run_once
+    raise self._current_activation_error
+
+  File "/Users/walter/tmp/alert-watcher2/.venv/lib/python3.12/site-packages/temporalio/worker/_workflow_instance.py", line 2006, in _run_top_level_workflow_function
+    await coro
+
+  File "/Users/walter/tmp/alert-watcher2/.venv/lib/python3.12/site-packages/temporalio/worker/_workflow_instance.py", line 897, in run_workflow
+    result = await self._inbound.execute_workflow(input)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+  File "/Users/walter/tmp/alert-watcher2/.venv/lib/python3.12/site-packages/temporalio/worker/_workflow_instance.py", line 2387, in execute_workflow
+    return await input.run_fn(*args)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+  File "/Users/walter/tmp/alert-watcher2/src/alert_watcher_agent/workflows.py", line 859, in run
+    "command_executed": f"Processed {len(crash_dump_result['processed_pods'])} pods, uploaded {crash_dump_result['upload_count']} files",
+                                                                                               ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^
+
+```
+- [x] S3-Upload-CrateDBContainerRestart-CrateDBContainerRestart-unknown-unknown-0-1752348400.460056

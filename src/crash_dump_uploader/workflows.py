@@ -88,7 +88,10 @@ class CrashDumpUploadWorkflow:
                 "errors": [str(e)],
                 "message": f"Invalid alert data: {str(e)}",
                 "total_duration_seconds": 0.0,
-                "total_size_bytes": 0
+                "total_size_bytes": 0,
+                "upload_count": 0,
+                "deletion_count": 0,
+                "total_uploaded_size": 0
             }
         
         workflow.logger.info(
@@ -142,7 +145,10 @@ class CrashDumpUploadWorkflow:
                     "errors": [],
                     "message": f"No crash dumps found in any of the {len(statefulset_pods)} pods",
                     "total_duration_seconds": (workflow.now() - workflow_start_time).total_seconds(),
-                    "total_size_bytes": 0
+                    "total_size_bytes": 0,
+                    "upload_count": 0,
+                    "deletion_count": 0,
+                    "total_uploaded_size": 0
                 }
             
             # Step 2: ONLY NOW get AWS credentials (crash dumps found)
@@ -224,7 +230,10 @@ class CrashDumpUploadWorkflow:
                 "errors": [str(e)],
                 "message": f"Crash dump upload workflow failed: {str(e)}",
                 "total_duration_seconds": (workflow.now() - workflow_start_time).total_seconds(),
-                "total_size_bytes": 0
+                "total_size_bytes": 0,
+                "upload_count": 0,
+                "deletion_count": 0,
+                "total_uploaded_size": 0
             }
 
     async def _process_all_crash_dumps(

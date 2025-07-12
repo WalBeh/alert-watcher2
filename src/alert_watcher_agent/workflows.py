@@ -463,8 +463,22 @@ class ClusterWorkerWorkflow:
         Returns:
             Dictionary containing CommandResponse data
         """
-        # Generate unique workflow ID for the child workflow
-        child_workflow_id = f"kubectl-exec-{request.alert_id}-{request.command_type.value}-{workflow.now().timestamp()}"
+        # Generate shorter workflow ID: CrateDBContainerRestart-{cluster_short}-{pod_name}-{pod_uuid}-{ordinal}-{command_type}-{timestamp}
+        cluster_short = request.cluster_context.split('-')[0] if '-' in request.cluster_context else request.cluster_context[:8]
+        pod_full_name = request.pod
+        
+        # Extract pod components: crate-data-hot-d84c10e6-d8fb-4d10-bf60-f9f2ea919a73-1
+        pod_parts = pod_full_name.split('-')
+        if len(pod_parts) >= 2:
+            pod_base = '-'.join(pod_parts[:-6]) if len(pod_parts) > 6 else '-'.join(pod_parts[:-1])  # crate-data-hot
+            pod_uuid = pod_parts[-6] if len(pod_parts) > 6 else pod_parts[-2]  # d84c10e6
+            pod_ordinal = pod_parts[-1] if pod_parts[-1].isdigit() else '0'  # 1
+        else:
+            pod_base = pod_full_name
+            pod_uuid = 'unknown'
+            pod_ordinal = '0'
+        
+        child_workflow_id = f"CrateDBContainerRestart-{cluster_short}-{pod_base}-{pod_uuid}-{pod_ordinal}-{request.command_type.value}-{workflow.now().timestamp()}"
 
         # Get timeout and retry configuration
         activity_timeouts = self.config_dict.get("activity_timeouts", {})
@@ -801,11 +815,28 @@ class HemakoCrashHeapdumpWorkflow:
             "annotations": request.alert_annotations
         }
         
+        # Generate shorter workflow ID: S3-Upload-CrateDBContainerRestart-{cluster_short}-{pod_name}-{pod_uuid}-{ordinal}-{timestamp}
+        cluster_short = request.cluster_context.split('-')[0] if '-' in request.cluster_context else request.cluster_context[:8]
+        pod_full_name = request.pod
+        
+        # Extract pod components: crate-data-hot-d84c10e6-d8fb-4d10-bf60-f9f2ea919a73-1
+        pod_parts = pod_full_name.split('-')
+        if len(pod_parts) >= 2:
+            pod_base = '-'.join(pod_parts[:-6]) if len(pod_parts) > 6 else '-'.join(pod_parts[:-1])  # crate-data-hot
+            pod_uuid = pod_parts[-6] if len(pod_parts) > 6 else pod_parts[-2]  # d84c10e6
+            pod_ordinal = pod_parts[-1] if pod_parts[-1].isdigit() else '0'  # 1
+        else:
+            pod_base = pod_full_name
+            pod_uuid = 'unknown'
+            pod_ordinal = '0'
+        
+        workflow_id = f"S3-Upload-CrateDBContainerRestart-{cluster_short}-{pod_base}-{pod_uuid}-{pod_ordinal}-{workflow.now().timestamp()}"
+        
         # Execute crash dump upload workflow as child workflow
         crash_dump_result = await workflow.execute_child_workflow(
             CrashDumpUploadWorkflow.run,
             alert_data,
-            id=f"crash-dump-upload-{request.alert_id}-{workflow.now().timestamp()}",
+            id=workflow_id,
             task_queue=f"alert-watcher-agent-{request.cluster_context}",
             execution_timeout=timedelta(minutes=45),
             retry_policy=RetryPolicy(
@@ -825,8 +856,8 @@ class HemakoCrashHeapdumpWorkflow:
             "correlation_id": request.correlation_id,
             "status": "completed" if crash_dump_result["success"] else "failed",
             "execution_duration_seconds": crash_dump_result["total_duration_seconds"],
-            "command_executed": f"Processed {len(crash_dump_result['processed_pods'])} pods, uploaded {crash_dump_result['upload_count']} files",
-            "stdout": f"Processed {len(crash_dump_result['processed_pods'])} pods, uploaded {crash_dump_result['upload_count']} files",
+            "command_executed": f"Processed {len(crash_dump_result['processed_pods'])} pods, uploaded {crash_dump_result.get('upload_count', 0)} files",
+            "stdout": f"Processed {len(crash_dump_result['processed_pods'])} pods, uploaded {crash_dump_result.get('upload_count', 0)} files",
             "stderr": None if crash_dump_result["success"] else crash_dump_result["message"],
             "metadata": {
                 "processed_pods": crash_dump_result["processed_pods"],

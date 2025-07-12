@@ -34,6 +34,14 @@ class Config(BaseSettings):
     max_retries: int = Field(default=3, description="Maximum retry attempts")
     retry_backoff_seconds: int = Field(default=2, description="Retry backoff base seconds")
     
+    # Temporal Connection Retry Configuration
+    temporal_retry_initial_interval: float = Field(default=1.0, description="Initial retry interval for Temporal connections")
+    temporal_retry_max_interval: float = Field(default=60.0, description="Maximum retry interval for Temporal connections")
+    temporal_retry_multiplier: float = Field(default=2.0, description="Retry backoff multiplier for Temporal connections")
+    temporal_retry_max_attempts: Optional[int] = Field(default=None, description="Maximum retry attempts for Temporal connections (None for infinite)")
+    temporal_health_check_interval: float = Field(default=30.0, description="Temporal connection health check interval in seconds")
+    temporal_connection_timeout: float = Field(default=10.0, description="Temporal connection timeout in seconds")
+    
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
@@ -43,6 +51,21 @@ class Config(BaseSettings):
     def temporal_address(self) -> str:
         """Get the full Temporal server address."""
         return f"{self.temporal_host}:{self.temporal_port}"
+    
+    def get_temporal_address(self) -> str:
+        """Get the full Temporal server address (alternative method)."""
+        return self.temporal_address
+    
+    def get_temporal_retry_config(self):
+        """Get Temporal retry configuration as a RetryConfig object."""
+        from alert_watcher.temporal_connection import RetryConfig
+        return RetryConfig(
+            initial_interval=self.temporal_retry_initial_interval,
+            max_interval=self.temporal_retry_max_interval,
+            multiplier=self.temporal_retry_multiplier,
+            max_attempts=self.temporal_retry_max_attempts,
+            jitter=True
+        )
     
     @property
     def is_development(self) -> bool:
