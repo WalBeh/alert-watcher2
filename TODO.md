@@ -34,3 +34,13 @@
 - [ ] Web UI for monitoring
 - [ ] Alert history and analytics
 - [ ] Integration with other monitoring tools
+
+--
+- [ ] agent: Catch expired or invalid credentials and not able to connec to k8s api:
+```
+An error occurred (ExpiredToken) when calling the AssumeRole operation: The security token included in the request is expired
+E0712 14:02:43.947035   39555 memcache.go:265] "Unhandled Error" err="couldn't get current server API group list: Get \"https://eks1-us-east-1-dev.tail1ec75.ts.net/api?timeout=32s\": getting credentials: exec: executable aws failed with exit code 254"
+```
+
+- [ ] web-hook server: should be able to re-connect to temporarl
+- [ ] workflow names: should be shorter: either cluster name, or only first token in the UUID of the namespace, sts: `kubectl-exec-CrateDBContainerRestart-85c8074c-9bf8-4f0a-867c-faf252c76bf0-crate-data-hot-d84c10e6-d8fb-4d10-bf60-f9f2ea919a73-1-1b1c0f8d-hemako_crash_heapdump-1752324341.407892`
