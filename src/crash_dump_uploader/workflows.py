@@ -320,9 +320,20 @@ class CrashDumpUploadWorkflow:
         )
         
         # Step 2: Upload to S3
-        timestamp = int(time.time())
-        file_extension = crash_dump.file_path.split('.')[-1]  # hprof
-        s3_key = f"{pod.name}-{timestamp}.{file_extension}.gz"
+        # Generate S3 key based on file type, matching standalone script convention
+        if crash_dump.file_type == "java_pid1.hprof":
+            # Crash heap-dump (critical): {pod_name}-java_pid1.hprof.gz
+            s3_key = f"{pod.name}-java_pid1.hprof.gz"
+        elif crash_dump.file_type == "additional_hprof":
+            # Regular heap-dump: {pod_name}.hprof.gz
+            s3_key = f"{pod.name}.hprof.gz"
+        elif crash_dump.file_type == "jfr":
+            # JFR files: {pod_name}.jfr (no compression for JFR)
+            s3_key = f"{pod.name}.jfr"
+        else:
+            # Fallback for unknown types
+            file_extension = crash_dump.file_path.split('.')[-1]
+            s3_key = f"{pod.name}.{file_extension}.gz"
         
         upload_result_dict = await workflow.execute_activity(
             upload_file_to_s3,
@@ -354,7 +365,7 @@ class CrashDumpUploadWorkflow:
             # Step 3: CRITICAL - Verify S3 upload
             verification_result_dict = await workflow.execute_activity(
                 verify_s3_upload,
-                args=[s3_key, compressed_file.compressed_size, aws_credentials],
+                args=[pod, upload_result_dict, aws_credentials],
                 start_to_close_timeout=timedelta(minutes=5),
                 retry_policy=RetryPolicy(
                     initial_interval=timedelta(seconds=5),
@@ -364,19 +375,10 @@ class CrashDumpUploadWorkflow:
                 )
             )
             
-            # Reconstruct S3VerificationResult object from dict
-            verification_result = S3VerificationResult(
-                verified=verification_result_dict['verified'],
-                s3_key=verification_result_dict['s3_key'],
-                s3_size=verification_result_dict.get('s3_size'),
-                etag=verification_result_dict.get('etag'),
-                version_id=verification_result_dict.get('version_id'),
-                storage_class=verification_result_dict.get('storage_class'),
-                last_modified=datetime.fromisoformat(verification_result_dict['last_modified']) if verification_result_dict.get('last_modified') else None,
-                error_message=verification_result_dict.get('error_message')
-            )
+            # Use verification result directly from flanker.py
+            verification_result = verification_result_dict
             
-            verification_passed = verification_result.verified
+            verification_passed = verification_result.get('verified', False)
             
             # Step 4: ONLY delete if verification passed
             if verification_passed:

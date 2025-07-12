@@ -37,7 +37,7 @@ async def discover_crash_dumps(pod: CrateDBPod) -> CrashDumpDiscoveryResult:
     This activity:
     1. First checks if java_pid1.hprof exists (most critical file)
     2. Returns early if no java_pid1.hprof - no upload needed
-    3. If found, looks for additional .hprof files
+    3. If found, looks for additional .hprof and .jfr files (uncompressed only)
     4. Returns discovery result with upload requirements
 
     Args:
@@ -154,8 +154,8 @@ async def discover_crash_dumps(pod: CrateDBPod) -> CrashDumpDiscoveryResult:
             file_type="java_pid1.hprof"
         )]
 
-        # Look for additional .hprof files
-        additional_dumps = await _find_additional_hprof_files(pod, heapdump_dir, java_pid1_path)
+        # Look for additional .hprof and .jfr files (uncompressed only)
+        additional_dumps = await _find_additional_crash_dump_files(pod, heapdump_dir, java_pid1_path)
         crash_dumps.extend(additional_dumps)
 
         # Log details about all found crash dumps
@@ -260,15 +260,15 @@ async def _check_heapdump_directory(pod: CrateDBPod, heapdump_dir: str) -> dict:
         }
 
 
-async def _find_additional_hprof_files(
+async def _find_additional_crash_dump_files(
     pod: CrateDBPod,
     heapdump_dir: str,
     exclude_path: str
 ) -> List[CrashDumpFile]:
-    """Find additional .hprof files in the heapdump directory."""
+    """Find additional .hprof and .jfr files (uncompressed only) in the heapdump directory."""
     try:
-        # Use find to locate all .hprof files
-        find_command = ["find", heapdump_dir, "-name", "*.hprof", "-type", "f"]
+        # Use find to locate all .hprof and .jfr files, but exclude .gz files
+        find_command = ["find", heapdump_dir, "-type", "f", "(", "-name", "*.hprof", "-o", "-name", "*.jfr", ")", "!", "-name", "*.gz"]
 
         result = await execute_command_in_pod_simple(
             pod=pod,
@@ -278,7 +278,7 @@ async def _find_additional_hprof_files(
 
         if result.exit_code != 0:
             activity.logger.warning(
-                f"Failed to find additional hprof files - pod: {pod.name}, "
+                f"Failed to find additional crash dump files - pod: {pod.name}, "
                 f"directory: {heapdump_dir}, error: {result.stderr}"
             )
             return []
@@ -286,40 +286,49 @@ async def _find_additional_hprof_files(
         # Parse found files
         additional_dumps = []
         if result.stdout.strip():
-            hprof_files = result.stdout.strip().split('\n')
+            crash_dump_files = result.stdout.strip().split('\n')
 
-            for hprof_file in hprof_files:
-                hprof_file = hprof_file.strip()
+            for crash_dump_file in crash_dump_files:
+                crash_dump_file = crash_dump_file.strip()
 
                 # Skip the java_pid1.hprof we already processed
-                if hprof_file == exclude_path:
+                if crash_dump_file == exclude_path:
                     continue
 
                 # Skip empty lines
-                if not hprof_file:
+                if not crash_dump_file:
                     continue
 
                 try:
                     # Get file info
-                    file_info = await get_file_info_in_pod(pod, hprof_file)
+                    file_info = await get_file_info_in_pod(pod, crash_dump_file)
+
+                    # Determine file type based on extension
+                    if crash_dump_file.endswith('.hprof'):
+                        file_type = "additional_hprof"
+                    elif crash_dump_file.endswith('.jfr'):
+                        file_type = "jfr"
+                    else:
+                        file_type = "unknown"
 
                     additional_dumps.append(CrashDumpFile(
                         pod_name=pod.name,
-                        file_path=hprof_file,
+                        file_path=crash_dump_file,
                         file_size=file_info.size,
                         last_modified=file_info.modified_time.isoformat() if file_info.modified_time else None,
-                        file_type="additional_hprof"
+                        file_type=file_type
                     ))
 
                     activity.logger.info(
-                        f"Found additional hprof file - pod: {pod.name}, file_path: {hprof_file}, "
-                        f"file_size: {file_info.size}, size_mb: {round(file_info.size / (1024 * 1024), 2)}"
+                        f"Found additional crash dump file - pod: {pod.name}, file_path: {crash_dump_file}, "
+                        f"file_size: {file_info.size}, size_mb: {round(file_info.size / (1024 * 1024), 2)}, "
+                        f"file_type: {file_type}"
                     )
 
                 except Exception as e:
                     activity.logger.warning(
-                        f"Failed to get info for additional hprof file - pod: {pod.name}, "
-                        f"file_path: {hprof_file}, error: {str(e)}"
+                        f"Failed to get info for additional crash dump file - pod: {pod.name}, "
+                        f"file_path: {crash_dump_file}, error: {str(e)}"
                     )
                     continue
 
@@ -327,17 +336,17 @@ async def _find_additional_hprof_files(
 
     except Exception as e:
         activity.logger.warning(
-            f"Exception while finding additional hprof files - pod: {pod.name}, "
+            f"Exception while finding additional crash dump files - pod: {pod.name}, "
             f"directory: {heapdump_dir}, error: {str(e)}"
         )
         return []
 
 
-async def _find_all_hprof_files(pod: CrateDBPod, heapdump_dir: str) -> List[CrashDumpFile]:
-    """Find all .hprof files in the heapdump directory."""
+async def _find_all_crash_dump_files(pod: CrateDBPod, heapdump_dir: str) -> List[CrashDumpFile]:
+    """Find all .hprof and .jfr files (uncompressed only) in the heapdump directory."""
     try:
-        # Use find to locate all .hprof files
-        find_command = ["find", heapdump_dir, "-name", "*.hprof", "-type", "f"]
+        # Use find to locate all .hprof and .jfr files, but exclude .gz files
+        find_command = ["find", heapdump_dir, "-type", "f", "(", "-name", "*.hprof", "-o", "-name", "*.jfr", ")", "!", "-name", "*.gz"]
 
         result = await execute_command_in_pod_simple(
             pod=pod,
@@ -347,7 +356,7 @@ async def _find_all_hprof_files(pod: CrateDBPod, heapdump_dir: str) -> List[Cras
 
         if result.exit_code != 0:
             activity.logger.warning(
-                f"Failed to find all hprof files - pod: {pod.name}, "
+                f"Failed to find all crash dump files - pod: {pod.name}, "
                 f"directory: {heapdump_dir}, error: {result.stderr}"
             )
             return []
@@ -355,43 +364,47 @@ async def _find_all_hprof_files(pod: CrateDBPod, heapdump_dir: str) -> List[Cras
         # Parse found files
         all_dumps = []
         if result.stdout.strip():
-            hprof_files = result.stdout.strip().split('\n')
+            crash_dump_files = result.stdout.strip().split('\n')
 
-            for hprof_file in hprof_files:
-                hprof_file = hprof_file.strip()
+            for crash_dump_file in crash_dump_files:
+                crash_dump_file = crash_dump_file.strip()
 
                 # Skip empty lines
-                if not hprof_file:
+                if not crash_dump_file:
                     continue
 
                 try:
                     # Get file info
-                    file_info = await get_file_info_in_pod(pod, hprof_file)
+                    file_info = await get_file_info_in_pod(pod, crash_dump_file)
 
-                    # Determine file type based on filename
-                    if hprof_file.endswith("java_pid1.hprof"):
+                    # Determine file type based on filename and extension
+                    if crash_dump_file.endswith("java_pid1.hprof"):
                         file_type = "java_pid1.hprof"
-                    else:
+                    elif crash_dump_file.endswith('.hprof'):
                         file_type = "additional_hprof"
+                    elif crash_dump_file.endswith('.jfr'):
+                        file_type = "jfr"
+                    else:
+                        file_type = "unknown"
 
                     all_dumps.append(CrashDumpFile(
                         pod_name=pod.name,
-                        file_path=hprof_file,
+                        file_path=crash_dump_file,
                         file_size=file_info.size,
                         last_modified=file_info.modified_time.isoformat() if file_info.modified_time else None,
                         file_type=file_type
                     ))
 
                     activity.logger.info(
-                        f"Found hprof file - pod: {pod.name}, file_path: {hprof_file}, "
+                        f"Found crash dump file - pod: {pod.name}, file_path: {crash_dump_file}, "
                         f"file_size: {file_info.size}, size_mb: {round(file_info.size / (1024 * 1024), 2)}, "
                         f"file_type: {file_type}"
                     )
 
                 except Exception as e:
                     activity.logger.warning(
-                        f"Failed to get info for hprof file - pod: {pod.name}, "
-                        f"file_path: {hprof_file}, error: {str(e)}"
+                        f"Failed to get info for crash dump file - pod: {pod.name}, "
+                        f"file_path: {crash_dump_file}, error: {str(e)}"
                     )
                     continue
 
@@ -399,7 +412,7 @@ async def _find_all_hprof_files(pod: CrateDBPod, heapdump_dir: str) -> List[Cras
 
     except Exception as e:
         activity.logger.warning(
-            f"Exception while finding all hprof files - pod: {pod.name}, "
+            f"Exception while finding all crash dump files - pod: {pod.name}, "
             f"directory: {heapdump_dir}, error: {str(e)}"
         )
         return []
@@ -437,16 +450,16 @@ async def get_upload_credentials(
         f"session_name: {role_session_name}, duration: {duration_seconds}s"
     )
 
+    # Role ARN for the upload role - configurable via environment variable
+    role_arn = os.getenv(
+        "AWS_HEAPDUMP_UPLOAD_ROLE_ARN", 
+        "arn:aws:iam::538162834475:role/heapdump-upload-role"
+    )
+
     try:
         # Create an STS client using current AWS credentials
         session = boto3.Session()
         sts_client = session.client("sts")
-
-        # Role ARN for the upload role - configurable via environment variable
-        role_arn = os.getenv(
-            "AWS_HEAPDUMP_UPLOAD_ROLE_ARN", 
-            "arn:aws:iam::538162834475:role/heapdump-upload-role"
-        )
 
         activity.logger.info(f"Assuming AWS role: {role_arn}")
 
