@@ -8,7 +8,7 @@ file management, and common tasks used across upload workflows.
 import os
 import time
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import Optional, List
 
 from kubernetes import client, config
 from kubernetes.stream import stream
@@ -28,12 +28,20 @@ def load_kube_config(context: Optional[str] = None) -> None:
     """Load Kubernetes configuration."""
     try:
         if context:
+            logger.info(f"Loading Kubernetes config with context: {context}")
             config.load_kube_config(context=context)
         else:
+            logger.info("Loading Kubernetes config without context")
             config.load_kube_config()
-    except Exception:
-        # Try in-cluster config if local config fails
-        config.load_incluster_config()
+    except Exception as e:
+        logger.warning(f"Failed to load kube config: {e}, trying in-cluster config")
+        try:
+            # Try in-cluster config if local config fails
+            config.load_incluster_config()
+            logger.info("Successfully loaded in-cluster Kubernetes config")
+        except Exception as cluster_e:
+            logger.error(f"Failed to load in-cluster config: {cluster_e}")
+            raise
 
 
 async def execute_command_in_pod_simple(
@@ -57,8 +65,14 @@ async def execute_command_in_pod_simple(
     start_time = time.time()
     
     try:
-        # Load Kubernetes config
-        load_kube_config()
+        # Load Kubernetes config with proper context
+        cluster_context = getattr(pod, 'cluster_context', None)
+        if cluster_context:
+            logger.info(f"Using cluster context: {cluster_context} for pod: {pod.name}")
+        else:
+            logger.info(f"No cluster context provided for pod: {pod.name}, using default")
+        
+        load_kube_config(context=cluster_context)
         core_v1 = client.CoreV1Api()
         
         # Prepare command with environment variables
@@ -130,10 +144,21 @@ async def file_exists_in_pod(pod: CrateDBPod, file_path: str) -> bool:
     """Check if a file exists in the pod."""
     test_command = ["test", "-f", file_path]
     
+    logger.info(
+        f"DEBUG: Checking file existence - pod: {pod.name}, "
+        f"file_path: '{file_path}', command: {test_command}"
+    )
+    
     result = await execute_command_in_pod_simple(
         pod=pod,
         command=test_command,
         timeout=timedelta(minutes=1)
+    )
+    
+    logger.info(
+        f"DEBUG: File existence check result - pod: {pod.name}, "
+        f"file_path: '{file_path}', exit_code: {result.exit_code}, "
+        f"stdout: '{result.stdout}', stderr: '{result.stderr}'"
     )
     
     return result.exit_code == 0
@@ -250,6 +275,7 @@ def extract_pod_from_alert(alert_data: dict) -> CrateDBPod:
     namespace = labels.get("namespace")
     pod_name = labels.get("pod")
     container = labels.get("container", "crate")
+    cluster_context = labels.get("cluster_context", "")
     
     if not namespace or not pod_name:
         raise ValueError(f"Missing required labels: namespace={namespace}, pod={pod_name}")
@@ -257,8 +283,56 @@ def extract_pod_from_alert(alert_data: dict) -> CrateDBPod:
     return CrateDBPod(
         name=pod_name,
         namespace=namespace,
-        container=container
+        container=container,
+        cluster_context=cluster_context
     )
+
+
+def extract_statefulset_pods_from_alert(alert_data: dict, replica_count: int = 3) -> List[CrateDBPod]:
+    """Extract all StatefulSet pods from alert data.
+    
+    For StatefulSet pods, if the alert mentions 'podname-1', this function will generate
+    all pods in the StatefulSet: podname-0, podname-1, podname-2, etc.
+    
+    Args:
+        alert_data: Alert data containing pod information
+        replica_count: Number of replicas in the StatefulSet (default: 3)
+        
+    Returns:
+        List of CrateDBPod objects for all pods in the StatefulSet
+    """
+    labels = alert_data.get("labels", {})
+    namespace = labels.get("namespace")
+    alert_pod_name = labels.get("pod")
+    container = labels.get("container", "crate")
+    
+    if not namespace or not alert_pod_name:
+        raise ValueError(f"Missing required labels: namespace={namespace}, pod={alert_pod_name}")
+    
+    # Extract base name from StatefulSet pod name
+    # StatefulSet pods are named like: podname-0, podname-1, podname-2
+    import re
+    match = re.match(r'^(.+)-(\d+)$', alert_pod_name)
+    if match:
+        base_name = match.group(1)
+        # Generate all pod names for the StatefulSet
+        pod_names = [f"{base_name}-{i}" for i in range(replica_count)]
+    else:
+        # If not a StatefulSet pattern, fall back to single pod
+        pod_names = [alert_pod_name]
+    
+    # Create CrateDBPod objects for all pods
+    pods = []
+    cluster_context = labels.get("cluster_context", "")
+    for pod_name in pod_names:
+        pods.append(CrateDBPod(
+            name=pod_name,
+            namespace=namespace,
+            container=container,
+            cluster_context=cluster_context
+        ))
+    
+    return pods
 
 
 def parse_flanker_progress(output: str) -> dict:

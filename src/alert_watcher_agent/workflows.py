@@ -778,31 +778,68 @@ class HemakoCrashHeapdumpWorkflow:
         # Can be re-enabled when needed for production
 
         workflow.logger.info(
-            f"Starting Hemako crash heapdump execution - alert_id: {request.alert_id}, cluster_context: {request.cluster_context}, namespace: {request.namespace}, pod: {request.pod}"
+            f"Starting Hemako crash heapdump execution for StatefulSet - alert_id: {request.alert_id}, cluster_context: {request.cluster_context}, namespace: {request.namespace}, alert_pod: {request.pod}"
         )
 
         # Import activity here to avoid import issues
         from .activities import execute_kubectl_command
 
-        # Execute the activity with proper timeouts (longer for heapdump upload)
-        result_dict = await workflow.execute_activity(
-            execute_kubectl_command,
-            request.to_dict(),
-            start_to_close_timeout=timedelta(minutes=45),  # Longer timeout for heapdump upload
-            schedule_to_close_timeout=timedelta(minutes=50),
-            heartbeat_timeout=timedelta(minutes=5),
+        # Import crash dump upload workflow
+        from crash_dump_uploader.workflows import CrashDumpUploadWorkflow
+        
+        # Create alert data for crash dump upload workflow
+        alert_data = {
+            "alert_id": request.alert_id,
+            "alert_name": request.alert_name,
+            "correlation_id": request.correlation_id,
+            "labels": {
+                "namespace": request.namespace,
+                "pod": request.pod,
+                "cluster_context": request.cluster_context,
+                **request.alert_labels
+            },
+            "annotations": request.alert_annotations
+        }
+        
+        # Execute crash dump upload workflow as child workflow
+        crash_dump_result = await workflow.execute_child_workflow(
+            CrashDumpUploadWorkflow.run,
+            alert_data,
+            id=f"crash-dump-upload-{request.alert_id}-{workflow.now().timestamp()}",
+            task_queue=f"alert-watcher-agent-{request.cluster_context}",
+            execution_timeout=timedelta(minutes=45),
             retry_policy=RetryPolicy(
                 initial_interval=timedelta(seconds=1),
                 maximum_interval=timedelta(seconds=60),
                 backoff_coefficient=2.0,
-                maximum_attempts=2  # Fewer retries for resource-intensive operations
+                maximum_attempts=2
             )
         )
+        
+        # Convert crash dump result to command response format
+        result_dict = {
+            "success": crash_dump_result["success"],
+            "message": crash_dump_result["message"],
+            "cluster_context": request.cluster_context,
+            "alert_id": request.alert_id,
+            "correlation_id": request.correlation_id,
+            "status": "completed" if crash_dump_result["success"] else "failed",
+            "execution_duration_seconds": crash_dump_result["total_duration_seconds"],
+            "command_executed": f"Processed {len(crash_dump_result['processed_pods'])} pods, uploaded {crash_dump_result['upload_count']} files",
+            "stdout": f"Processed {len(crash_dump_result['processed_pods'])} pods, uploaded {crash_dump_result['upload_count']} files",
+            "stderr": None if crash_dump_result["success"] else crash_dump_result["message"],
+            "metadata": {
+                "processed_pods": crash_dump_result["processed_pods"],
+                "uploaded_files": len(crash_dump_result["uploaded_files"]),
+                "total_size_bytes": crash_dump_result["total_size_bytes"],
+                "processing_results": len(crash_dump_result["processing_results"])
+            }
+        }
 
         # Parse result and log completion
         response = CommandResponse.from_dict(result_dict)
         workflow.logger.info(
-            f"Hemako crash heapdump execution completed - alert_id: {request.alert_id}, success: {response.success}, duration: {response.execution_duration_seconds}s"
+            f"Hemako crash heapdump execution completed for StatefulSet - alert_id: {request.alert_id}, success: {response.success}, processed_pods: {len(crash_dump_result['processed_pods'])}, duration: {response.execution_duration_seconds}s"
         )
 
         return result_dict

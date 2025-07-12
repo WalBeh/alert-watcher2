@@ -11,6 +11,9 @@ temporalio>=1.2.0
 # Kubernetes client for agent
 kubernetes>=28.0.0
 
+# AWS SDK for credential management
+boto3>=1.34.0
+
 # HTTP client for testing
 httpx>=0.25.0
 

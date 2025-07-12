@@ -42,7 +42,7 @@ async def compress_file(
     pod: CrateDBPod,
     file_info: FileToUpload,
     aws_credentials: AWSCredentials
-) -> CompressedFile:
+) -> Dict[str, Any]:
     """
     Generic file compression activity.
     Works for both .hprof and .jfr files.
@@ -55,11 +55,10 @@ async def compress_file(
     redirect_command = ["sh", "-c", f"gzip -c '{file_info.file_path}' > '{compressed_path}'"]
     
     activity.logger.info(
-        "Starting file compression",
-        pod=pod.name,
-        file_path=file_info.file_path,
-        compressed_path=compressed_path,
-        original_size=file_info.file_size
+        f"Starting file compression - pod: {pod.name}, "
+        f"file_path: {file_info.file_path}, "
+        f"compressed_path: {compressed_path}, "
+        f"original_size: {file_info.file_size}"
     )
     
     start_time = time.time()
@@ -93,28 +92,27 @@ async def compress_file(
         compression_ratio = compressed_info.size / file_info.file_size if file_info.file_size > 0 else 0
         
         activity.logger.info(
-            "File compression completed",
-            pod=pod.name,
-            original_size=file_info.file_size,
-            compressed_size=compressed_info.size,
-            compression_ratio=compression_ratio,
-            duration=time.time() - start_time
+            f"File compression completed - pod: {pod.name}, "
+            f"original_size: {file_info.file_size}, "
+            f"compressed_size: {compressed_info.size}, "
+            f"compression_ratio: {compression_ratio}, "
+            f"duration: {time.time() - start_time}"
         )
         
-        return CompressedFile(
+        compressed_file = CompressedFile(
             original_path=file_info.file_path,
             compressed_path=compressed_path,
             original_size=file_info.file_size,
             compressed_size=compressed_info.size,
             compression_ratio=compression_ratio
         )
+        return compressed_file.to_dict()
         
     except Exception as e:
         activity.logger.error(
-            "File compression failed",
-            pod=pod.name,
-            file_path=file_info.file_path,
-            error=str(e)
+            f"File compression failed - pod: {pod.name}, "
+            f"file_path: {file_info.file_path}, "
+            f"error: {str(e)}"
         )
         raise
 
@@ -122,21 +120,20 @@ async def compress_file(
 @activity.defn(name="upload_file_to_s3")
 async def upload_file_to_s3(
     pod: CrateDBPod,
-    compressed_file: CompressedFile,
+    compressed_file: dict,
     s3_key: str,
     aws_credentials: AWSCredentials
-) -> S3UploadResult:
+) -> Dict[str, Any]:
     """
     Generic S3 upload activity using flanker.py.
     Executes flanker.py inside the pod where the file is located.
     """
     
     activity.logger.info(
-        "Starting S3 upload",
-        pod=pod.name,
-        file_path=compressed_file.compressed_path,
-        s3_key=s3_key,
-        file_size=compressed_file.compressed_size
+        f"Starting S3 upload - pod: {pod.name}, "
+        f"file_path: {compressed_file['compressed_path']}, "
+        f"s3_key: {s3_key}, "
+        f"file_size: {compressed_file['compressed_size']}"
     )
     
     start_time = time.time()
@@ -160,7 +157,7 @@ async def upload_file_to_s3(
         # Execute flanker.py inside the pod
         flanker_command = [
             "python3", flanker_path,
-            compressed_file.compressed_path,
+            compressed_file['compressed_path'],
             "--bucket", "cratedb-cloud-heapdumps",
             "--key", s3_key,
             "--region", "us-east-1",
@@ -181,44 +178,43 @@ async def upload_file_to_s3(
         
         if success:
             activity.logger.info(
-                "S3 upload completed successfully",
-                pod=pod.name,
-                s3_key=s3_key,
-                file_size=compressed_file.compressed_size,
-                duration=time.time() - start_time
+                f"S3 upload completed successfully - pod: {pod.name}, "
+                f"s3_key: {s3_key}, "
+                f"file_size: {compressed_file['compressed_size']}, "
+                f"duration: {time.time() - start_time}"
             )
         else:
             activity.logger.error(
-                "S3 upload failed",
-                pod=pod.name,
-                s3_key=s3_key,
-                error=result.stderr,
-                stdout=result.stdout
+                f"S3 upload failed - pod: {pod.name}, "
+                f"s3_key: {s3_key}, "
+                f"error: {result.stderr}, "
+                f"stdout: {result.stdout}"
             )
         
-        return S3UploadResult(
+        s3_result = S3UploadResult(
             success=success,
             s3_key=s3_key,
-            file_size=compressed_file.compressed_size,
+            file_size=compressed_file['compressed_size'],
             upload_duration=result.duration,
             error_message=result.stderr if not success else None
         )
+        return s3_result.to_dict()
         
     except Exception as e:
         activity.logger.error(
-            "S3 upload failed with exception",
-            pod=pod.name,
-            s3_key=s3_key,
-            error=str(e)
+            f"S3 upload failed with exception - pod: {pod.name}, "
+            f"s3_key: {s3_key}, "
+            f"error: {str(e)}"
         )
         
-        return S3UploadResult(
+        s3_result = S3UploadResult(
             success=False,
             s3_key=s3_key,
-            file_size=compressed_file.compressed_size,
+            file_size=compressed_file['compressed_size'],
             upload_duration=timedelta(seconds=time.time() - start_time),
             error_message=str(e)
         )
+        return s3_result.to_dict()
 
 
 async def execute_command_in_pod_with_progress(
@@ -331,7 +327,7 @@ async def verify_s3_upload(
     s3_key: str,
     expected_size: int,
     aws_credentials: AWSCredentials
-) -> S3VerificationResult:
+) -> Dict[str, Any]:
     """
     CRITICAL: Verify that the file was successfully uploaded to S3.
     This must pass before allowing file deletion.
@@ -339,9 +335,8 @@ async def verify_s3_upload(
     """
     
     activity.logger.info(
-        "Starting S3 upload verification",
-        s3_key=s3_key,
-        expected_size=expected_size
+        f"Starting S3 upload verification - s3_key: {s3_key}, "
+        f"expected_size: {expected_size}"
     )
     
     try:
@@ -372,17 +367,17 @@ async def verify_s3_upload(
         
         if not size_match:
             activity.logger.error(
-                "S3 upload size mismatch",
-                s3_key=s3_key,
-                expected_size=expected_size,
-                actual_size=s3_size,
-                size_difference=abs(s3_size - expected_size)
+                f"S3 upload size mismatch - s3_key: {s3_key}, "
+                f"expected_size: {expected_size}, "
+                f"actual_size: {s3_size}, "
+                f"size_difference: {abs(s3_size - expected_size)}"
             )
-            return S3VerificationResult(
+            verification_result = S3VerificationResult(
                 verified=False,
                 s3_key=s3_key,
                 error_message=f"Size mismatch: expected ~{expected_size}, got {s3_size}"
             )
+            return verification_result.to_dict()
         
         # Additional verification - list object versions to ensure it's really there
         versions_response = s3_client.list_object_versions(
@@ -394,27 +389,26 @@ async def verify_s3_upload(
         versions = versions_response.get('Versions', [])
         if not versions:
             activity.logger.error(
-                "S3 object not found in versions list",
-                s3_key=s3_key
+                f"S3 object not found in versions list - s3_key: {s3_key}"
             )
-            return S3VerificationResult(
+            verification_result = S3VerificationResult(
                 verified=False,
                 s3_key=s3_key,
                 error_message="Object not found in S3 versions list"
             )
+            return verification_result.to_dict()
         
         activity.logger.info(
-            "S3 upload verification successful",
-            s3_key=s3_key,
-            s3_size=s3_size,
-            expected_size=expected_size,
-            etag=etag,
-            version_id=version_id,
-            storage_class=storage_class,
-            last_modified=last_modified
+            f"S3 upload verification successful - s3_key: {s3_key}, "
+            f"s3_size: {s3_size}, "
+            f"expected_size: {expected_size}, "
+            f"etag: {etag}, "
+            f"version_id: {version_id}, "
+            f"storage_class: {storage_class}, "
+            f"last_modified: {last_modified}"
         )
         
-        return S3VerificationResult(
+        verification_result = S3VerificationResult(
             verified=True,
             s3_key=s3_key,
             s3_size=s3_size,
@@ -423,65 +417,66 @@ async def verify_s3_upload(
             storage_class=storage_class,
             last_modified=last_modified
         )
+        return verification_result.to_dict()
         
     except ClientError as e:
         error_code = e.response.get('Error', {}).get('Code', 'Unknown')
         error_message = e.response.get('Error', {}).get('Message', str(e))
         
         activity.logger.error(
-            "S3 verification failed - client error",
-            s3_key=s3_key,
-            error_code=error_code,
-            error_message=error_message
+            f"S3 verification failed - client error - s3_key: {s3_key}, "
+            f"error_code: {error_code}, "
+            f"error_message: {error_message}"
         )
         
-        return S3VerificationResult(
+        verification_result = S3VerificationResult(
             verified=False,
             s3_key=s3_key,
             error_message=f"S3 Error {error_code}: {error_message}"
         )
+        return verification_result.to_dict()
         
     except Exception as e:
         activity.logger.error(
-            "S3 verification failed - unexpected error",
-            s3_key=s3_key,
-            error=str(e)
+            f"S3 verification failed - unexpected error - s3_key: {s3_key}, "
+            f"error: {str(e)}"
         )
         
-        return S3VerificationResult(
+        verification_result = S3VerificationResult(
             verified=False,
             s3_key=s3_key,
             error_message=f"Verification failed: {str(e)}"
         )
+        return verification_result.to_dict()
 
 
 @activity.defn(name="safely_delete_file")
 async def safely_delete_file(
     pod: CrateDBPod,
     file_info: FileToUpload,
-    compressed_file: CompressedFile,
-    verification_result: S3VerificationResult
-) -> DeletionResult:
+    compressed_file: dict,
+    verification_result: dict
+) -> Dict[str, Any]:
     """
     CRITICAL: Safely delete files ONLY after S3 upload verification.
     This activity will REFUSE to delete files if S3 upload is not verified.
     """
     
-    if not verification_result.verified:
+    if not verification_result['verified']:
         activity.logger.error(
-            "REFUSING to delete files - S3 upload not verified",
-            pod=pod.name,
-            file_path=file_info.file_path,
-            verification_error=verification_result.error_message
+            f"REFUSING to delete files - S3 upload not verified - pod: {pod.name}, "
+            f"file_path: {file_info.file_path}, "
+            f"verification_error: {verification_result.get('error_message', 'Unknown error')}"
         )
-        return DeletionResult(
+        deletion_result = DeletionResult(
             deleted=False,
-            files=[file_info.file_path, compressed_file.compressed_path],
-            error_message=f"S3 upload not verified: {verification_result.error_message}"
+            files=[file_info.file_path, compressed_file['compressed_path']],
+            error_message=f"S3 upload not verified: {verification_result.get('error_message', 'Unknown error')}"
         )
+        return deletion_result.to_dict()
     
     # Double-check files still exist before deletion
-    files_to_delete = [file_info.file_path, compressed_file.compressed_path]
+    files_to_delete = [file_info.file_path, compressed_file['compressed_path']]
     existing_files = []
     
     for file_path in files_to_delete:
@@ -490,15 +485,15 @@ async def safely_delete_file(
     
     if not existing_files:
         activity.logger.info(
-            "Files already deleted or not found",
-            pod=pod.name,
-            files=files_to_delete
+            f"Files already deleted or not found - pod: {pod.name}, "
+            f"files: {files_to_delete}"
         )
-        return DeletionResult(
+        deletion_result = DeletionResult(
             deleted=True,
             files=files_to_delete,
             message="Files already deleted or not found"
         )
+        return deletion_result.to_dict()
     
     # Get current file info to ensure it's the same file we uploaded
     try:
@@ -507,34 +502,32 @@ async def safely_delete_file(
         # Safety check - ensure file hasn't changed since upload
         if current_file_info.size != file_info.file_size:
             activity.logger.error(
-                "REFUSING to delete file - file size changed since upload",
-                pod=pod.name,
-                file_path=file_info.file_path,
-                original_size=file_info.file_size,
-                current_size=current_file_info.size
+                f"REFUSING to delete file - file size changed since upload - pod: {pod.name}, "
+                f"file_path: {file_info.file_path}, "
+                f"original_size: {file_info.file_size}, "
+                f"current_size: {current_file_info.size}"
             )
-            return DeletionResult(
+            deletion_result = DeletionResult(
                 deleted=False,
                 files=files_to_delete,
                 error_message=f"File size changed: {file_info.file_size} -> {current_file_info.size}"
             )
+            return deletion_result.to_dict()
     except Exception as e:
         activity.logger.warning(
-            "Could not verify file info before deletion",
-            pod=pod.name,
-            file_path=file_info.file_path,
-            error=str(e)
+            f"Could not verify file info before deletion - pod: {pod.name}, "
+            f"file_path: {file_info.file_path}, "
+            f"error: {str(e)}"
         )
     
     # Final safety check - log critical information
     activity.logger.critical(
-        "PROCEEDING with file deletion - ALL VERIFICATIONS PASSED",
-        pod=pod.name,
-        files=existing_files,
-        file_size=file_info.file_size,
-        s3_key=verification_result.s3_key,
-        s3_version_id=verification_result.version_id,
-        s3_etag=verification_result.etag
+        f"PROCEEDING with file deletion - ALL VERIFICATIONS PASSED - pod: {pod.name}, "
+        f"files: {existing_files}, "
+        f"file_size: {file_info.file_size}, "
+        f"s3_key: {verification_result['s3_key']}, "
+        f"s3_version_id: {verification_result.get('version_id', 'Unknown')}, "
+        f"s3_etag: {verification_result.get('etag', 'Unknown')}"
     )
     
     # Delete the files
@@ -554,25 +547,22 @@ async def safely_delete_file(
             if delete_result.exit_code == 0:
                 deleted_files.append(file_path)
                 activity.logger.info(
-                    "File deleted successfully",
-                    pod=pod.name,
-                    file_path=file_path
+                    f"File deleted successfully - pod: {pod.name}, "
+                    f"file_path: {file_path}"
                 )
             else:
                 deletion_errors.append(f"{file_path}: {delete_result.stderr}")
                 activity.logger.error(
-                    "Failed to delete file",
-                    pod=pod.name,
-                    file_path=file_path,
-                    error=delete_result.stderr
+                    f"Failed to delete file - pod: {pod.name}, "
+                    f"file_path: {file_path}, "
+                    f"error: {delete_result.stderr}"
                 )
         except Exception as e:
             deletion_errors.append(f"{file_path}: {str(e)}")
             activity.logger.error(
-                "Exception while deleting file",
-                pod=pod.name,
-                file_path=file_path,
-                error=str(e)
+                f"Exception while deleting file - pod: {pod.name}, "
+                f"file_path: {file_path}, "
+                f"error: {str(e)}"
             )
     
     # Verify deletions
@@ -587,27 +577,27 @@ async def safely_delete_file(
     
     if success:
         activity.logger.info(
-            "All files successfully deleted from pod",
-            pod=pod.name,
-            deleted_files=verified_deletions,
-            s3_backup=verification_result.s3_key
+            f"All files successfully deleted from pod - pod: {pod.name}, "
+            f"deleted_files: {verified_deletions}, "
+            f"s3_backup: {verification_result['s3_key']}"
         )
         
-        return DeletionResult(
+        deletion_result = DeletionResult(
             deleted=True,
             files=verified_deletions,
-            message=f"Successfully deleted {len(verified_deletions)} files - backed up to {verification_result.s3_key}"
+            message=f"Successfully deleted {len(verified_deletions)} files - backed up to {verification_result['s3_key']}"
         )
+        return deletion_result.to_dict()
     else:
         activity.logger.error(
-            "Some files could not be deleted",
-            pod=pod.name,
-            deleted_files=verified_deletions,
-            errors=deletion_errors
+            f"Some files could not be deleted - pod: {pod.name}, "
+            f"deleted_files: {verified_deletions}, "
+            f"errors: {deletion_errors}"
         )
         
-        return DeletionResult(
+        deletion_result = DeletionResult(
             deleted=False,
             files=files_to_delete,
             error_message=f"Deletion errors: {'; '.join(deletion_errors)}"
         )
+        return deletion_result.to_dict()

@@ -377,9 +377,9 @@ def create_command_request_from_alert(
 def determine_command_type(alert_name: str) -> CommandType:
     """Determine command type based on alert name."""
     if alert_name == "CrateDBContainerRestart":
-        return CommandType.HEMAKO_JFR
-    elif alert_name == "CrateDBCloudNotResponsive":
         return CommandType.HEMAKO_CRASH_HEAPDUMP
+    elif alert_name == "CrateDBCloudNotResponsive":
+        return CommandType.HEMAKO_JFR
     else:
         return CommandType.KUBECTL_TEST
 

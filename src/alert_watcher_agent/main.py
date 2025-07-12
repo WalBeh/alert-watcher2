@@ -17,11 +17,17 @@ import structlog
 from temporalio.client import Client
 from temporalio.service import TLSConfig
 from temporalio.worker import Worker
+from temporalio.worker.workflow_sandbox import SandboxedWorkflowRunner, SandboxRestrictions
 from temporalio.exceptions import WorkflowAlreadyStartedError
 
 from .config import AgentConfig, load_config
 from .workflows import AgentCoordinatorWorkflow, ClusterWorkerWorkflow, KubectlTestWorkflow, HemakoJfrWorkflow, HemakoCrashHeapdumpWorkflow
 from .activities import execute_kubectl_command
+
+# Import crash dump upload workflow and activities
+from crash_dump_uploader.workflows import CrashDumpUploadWorkflow
+from crash_dump_uploader.activities import discover_crash_dumps, get_upload_credentials
+from file_uploader.activities import compress_file, upload_file_to_s3, verify_s3_upload, safely_delete_file
 
 
 class AlertWatcherAgent:
@@ -285,14 +291,19 @@ class AlertWatcherAgent:
         )
         
         try:
-            # Create workflow-only worker
+            # Create workflow-only worker with sandbox configuration
             cluster_worker = Worker(
                 self.temporal_client,
                 task_queue=task_queue,
-                workflows=[ClusterWorkerWorkflow, KubectlTestWorkflow, HemakoJfrWorkflow, HemakoCrashHeapdumpWorkflow],
+                workflows=[ClusterWorkerWorkflow, KubectlTestWorkflow, HemakoJfrWorkflow, HemakoCrashHeapdumpWorkflow, CrashDumpUploadWorkflow],
                 activities=[],  # No activities on workflow worker
                 max_concurrent_workflow_tasks=self.config.max_concurrent_workflow_tasks,
-                max_concurrent_activities=0  # No activities
+                max_concurrent_activities=0,  # No activities
+                workflow_runner=SandboxedWorkflowRunner(
+                    restrictions=SandboxRestrictions.default.with_passthrough_modules(
+                        "file_uploader", "crash_dump_uploader"
+                    )
+                )
             )
             
             self.cluster_workers[cluster_context] = cluster_worker
@@ -333,7 +344,15 @@ class AlertWatcherAgent:
                 self.temporal_client,
                 task_queue=task_queue,
                 workflows=[],  # No workflows on activity worker
-                activities=[execute_kubectl_command],
+                activities=[
+                    execute_kubectl_command,
+                    discover_crash_dumps,
+                    get_upload_credentials,
+                    compress_file,
+                    upload_file_to_s3,
+                    verify_s3_upload,
+                    safely_delete_file
+                ],
                 max_concurrent_workflow_tasks=0,  # No workflows
                 max_concurrent_activities=self.config.max_concurrent_activities,
                 max_concurrent_local_activities=0

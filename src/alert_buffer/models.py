@@ -40,7 +40,7 @@ class BufferedAlert:
     
     # Processing metadata
     correlation_id: str
-    command_type: str = "kubectl_test"
+    command_type: str = "hemako_crash_heapdump"
     
     # Buffer metadata
     buffer_id: str = field(default_factory=lambda: str(uuid.uuid4()))
@@ -139,7 +139,7 @@ class BufferedAlert:
             alert_labels=data['alert_labels'],
             alert_annotations=data['alert_annotations'],
             correlation_id=data['correlation_id'],
-            command_type=data.get('command_type', 'kubectl_test'),
+            command_type=data.get('command_type', 'hemako_crash_heapdump'),
             buffer_id=data['buffer_id'],
             buffered_at=buffered_at,
             status=AlertBufferStatus(data['status']),
@@ -163,7 +163,7 @@ class BufferedAlert:
             alert_labels=command_data['alert_labels'],
             alert_annotations=command_data['alert_annotations'],
             correlation_id=command_data['correlation_id'],
-            command_type=command_data.get('command_type', 'kubectl_test')
+            command_type=command_data.get('command_type', 'hemako_crash_heapdump')
         )
     
     def mark_processing(self):
